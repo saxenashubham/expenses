@@ -454,8 +454,9 @@ function renderCapture() {
     ? el("div", { class: "shot" }, [el("img", { src: c.img, alt: "receipt" }), c.reading ? el("div", { class: "reading" }, "Reading the receipt\u2026") : null])
     : el("div", { class: "drop" }, c.loadingPdf ? [el("div", { class: "reading" }, "Rendering PDF\u2026")] : [
         el("button", { class: "btn primary", onclick: () => $("#fileCam").click() }, "\uD83D\uDCF7 Take photo"),
-        el("button", { class: "btn ghost", onclick: () => $("#fileAny").click() }, "Choose file / PDF"),
-        el("div", { class: "drop-note" }, "JPEG, PNG, or PDF (first page)")
+        el("button", { class: "btn ghost", onclick: () => $("#fileImg").click() }, "\uD83D\uDDBC\uFE0F Upload image"),
+        el("button", { class: "btn ghost", onclick: () => $("#filePdf").click() }, "\uD83D\uDCC4 Upload PDF"),
+        el("div", { class: "drop-note" }, "a photo, an image file, or a PDF (first page)")
       ]);
 
   return el("section", { class: "panel" }, [
@@ -558,6 +559,7 @@ function renderReceipt(r) {
 
 // ---------- boot ----------
 $("#fileCam").addEventListener("change", onFileInput);
-$("#fileAny").addEventListener("change", onFileInput);
+$("#fileImg").addEventListener("change", onFileInput);
+$("#filePdf").addEventListener("change", onFileInput);
 if ("serviceWorker" in navigator) navigator.serviceWorker.register("./sw.js").catch(() => {});
 render();
