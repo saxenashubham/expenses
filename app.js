@@ -5,7 +5,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import {
   initializeFirestore, persistentLocalCache, collection, doc, setDoc,
-  deleteDoc, onSnapshot, query, orderBy, serverTimestamp, arrayUnion
+  deleteDoc, onSnapshot, query, orderBy, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import {
   getStorage, ref, uploadString, getDownloadURL, deleteObject
@@ -145,22 +145,49 @@ function subscribe() {
     if (state.screen === "ledger") render();
   }, (err) => { console.error(err); });
   unsubCards = onSnapshot(doc(db, "meta", "cards"), (d) => {
-    CARDS = (d.exists() && d.data().list) ? [...d.data().list].sort() : [];
-    if (state.screen === "ledger" && state.view === "capture") render();
+    const data = d.exists() ? d.data() : {};
+    const norm = normalizeCards(data.cards || data.list || []);
+    const changed = JSON.stringify(norm) !== JSON.stringify(data.cards || null);
+    CARDS = norm;
+    if (changed) persistCards(); // one-time cleanup: purge junk + drop legacy 'list' field
+    if (state.screen === "ledger") render();
   }, (err) => { console.error(err); });
 }
 
+function cardNames() { return CARDS.map((c) => c.name); }
+function cardByLast4(l4) { return l4 ? CARDS.find((c) => c.last4 === l4) : null; }
+function normalizeCards(raw) {
+  const out = [], seen = new Set();
+  (raw || []).forEach((entry) => {
+    let name = "", last4 = "";
+    if (typeof entry === "string") name = entry;
+    else if (entry && entry.name) { name = entry.name; last4 = (entry.last4 || "").replace(/\D/g, "").slice(-4); }
+    else return;
+    name = name.trim();
+    if (/^[\u2022\s]*\d{2,4}$/.test(name)) return; // drop junk digit-only "cards" the old build created
+    if (!name || seen.has(name)) return;
+    seen.add(name); out.push({ name, last4 });
+  });
+  return out.sort((a, b) => a.name.localeCompare(b.name));
+}
+async function persistCards() { try { await setDoc(doc(db, "meta", "cards"), { cards: CARDS }, { merge: false }); } catch (e) { console.error(e); } }
 async function addCard(name) {
   name = (name || "").trim(); if (!name) return "";
-  if (!CARDS.includes(name)) { CARDS = [...CARDS, name].sort(); }
-  try { await setDoc(doc(db, "meta", "cards"), { list: arrayUnion(name) }, { merge: true }); } catch (e) { console.error(e); }
+  if (!CARDS.some((c) => c.name === name)) { CARDS = [...CARDS, { name, last4: "" }].sort((a, b) => a.name.localeCompare(b.name)); await persistCards(); }
   return name;
 }
+async function linkLast4(name, last4) {
+  last4 = (last4 || "").replace(/\D/g, "").slice(-4); if (!name || !last4) return;
+  const c = CARDS.find((x) => x.name === name);
+  if (c) c.last4 = last4; else CARDS = [...CARDS, { name, last4 }].sort((a, b) => a.name.localeCompare(b.name));
+  await persistCards();
+}
+async function removeCard(name) { CARDS = CARDS.filter((c) => c.name !== name); await persistCards(); }
 
 // ---------- capture ----------
 function startCapture() {
   state.view = "capture";
-  state.cap = { img: null, date: todayISO(), merchant: "", amount: "", card: "", last4: "", category: "Other", hcsa: false, note: "", reading: false, err: false, addingCard: false, loadingPdf: false, saving: false };
+  state.cap = { img: null, date: todayISO(), merchant: "", amount: "", card: "", last4: "", linkLast4: "", category: "Other", hcsa: false, note: "", reading: false, err: false, addingCard: false, loadingPdf: false, saving: false };
   render();
 }
 function onFileInput(ev) { const f = ev.target.files && ev.target.files[0]; ev.target.value = ""; if (f) processFile(f); }
@@ -181,6 +208,9 @@ async function processFile(file) {
         state.cap.merchant = r.merchant || "";
         state.cap.amount = r.amount ? String(r.amount).replace(/[^0-9.]/g, "") : "";
         state.cap.last4 = (r.last4 || "").replace(/\D/g, "").slice(-4);
+        const match = cardByLast4(state.cap.last4);
+        if (match) { state.cap.card = match.name; state.cap.linkLast4 = ""; }
+        else if (state.cap.last4) { state.cap.linkLast4 = state.cap.last4; }
         state.cap.category = (r.category && CATEGORIES.includes(r.category)) ? r.category : (guessCategory(state.cap.merchant) || "Other");
       } catch (e) { state.cap.err = true; }
       state.cap.reading = false;
@@ -261,8 +291,9 @@ function render() {
   ]));
 
   if (state.view === "capture") return root.append(renderCapture());
+  if (state.view === "cards") return root.append(renderManageCards());
 
-  const cards = CARDS;
+  const cards = cardNames();
   root.append(el("section", { class: "filters" }, [
     el("div", { class: "f-row" }, [
       labelInput("From", el("input", { class: "mono", type: "date", value: state.flt.from, oninput: (e) => { state.flt.from = e.target.value; render(); } }), "from"),
@@ -303,7 +334,8 @@ function render() {
 
   root.append(el("footer", { class: "tools" }, [
     el("span", { class: "who" }, "Signed in as " + (USER.email || "")),
-    el("button", { class: "link spacer", onclick: doSignOut }, "Sign out")
+    el("button", { class: "link spacer", onclick: () => { state.view = "cards"; render(); } }, "Manage cards"),
+    el("button", { class: "link", onclick: doSignOut }, "Sign out")
   ]));
 }
 
@@ -342,16 +374,23 @@ function renderCardPicker(c) {
     let val = "";
     return el("div", { class: "card-add" }, [
       el("input", { placeholder: "New card name (e.g. Chase Sapphire)", oninput: (e) => val = e.target.value }),
-      el("button", { class: "btn primary", onclick: async () => { const n = await addCard(val); if (n) c.card = n; c.addingCard = false; render(); } }, "Add"),
+      el("button", { class: "btn primary", onclick: async () => { const n = await addCard(val); if (n) { c.card = n; if (c.linkLast4) { await linkLast4(n, c.linkLast4); c.linkLast4 = ""; } } c.addingCard = false; render(); } }, "Add"),
       el("button", { class: "btn ghost", onclick: () => { c.addingCard = false; render(); } }, "Cancel")
     ]);
   }
-  const s = el("select", { onchange: (e) => { const v = e.target.value; if (v === "__add__") c.addingCard = true; else c.card = v; render(); } }, [
+  const s = el("select", {
+    onchange: async (e) => {
+      const v = e.target.value;
+      if (v === "__add__") { c.addingCard = true; }
+      else { c.card = v; if (v && c.linkLast4) { await linkLast4(v, c.linkLast4); c.linkLast4 = ""; } }
+      render();
+    }
+  }, [
     el("option", { value: "" }, "Select a card"),
-    ...CARDS.map((x) => el("option", { value: x }, x)),
+    ...CARDS.map((x) => el("option", { value: x.name }, x.name + (x.last4 ? "  \u00b7\u00b7" + x.last4 : ""))),
     el("option", { value: "__add__" }, "\u2795 Add a card\u2026")
   ]);
-  s.value = CARDS.includes(c.card) ? c.card : "";
+  s.value = cardNames().includes(c.card) ? c.card : "";
   return s;
 }
 
@@ -374,7 +413,9 @@ function renderCapture() {
         field("Merchant", el("input", { value: c.merchant, placeholder: "e.g. Corner Pharmacy", oninput: (e) => c.merchant = e.target.value })),
         field("Amount", el("input", { class: "mono", value: c.amount, placeholder: "0.00", inputmode: "decimal", oninput: (e) => c.amount = e.target.value })),
         field("Card used", renderCardPicker(c)),
-        c.last4 ? el("button", { class: "detect-chip", onclick: async () => { c.card = await addCard("\u2022\u2022" + c.last4); render(); } }, "Receipt shows \u2022\u2022" + c.last4 + " \u2014 add as card") : null,
+        c.linkLast4
+          ? el("div", { class: "detect-note" }, "Receipt shows \u2022\u2022" + c.linkLast4 + " \u2014 pick the card and I'll remember it next time")
+          : (c.last4 && cardByLast4(c.last4)) ? el("div", { class: "detect-note ok" }, "Recognized \u2022\u2022" + c.last4 + " \u2192 " + cardByLast4(c.last4).name) : null,
         field("Category", selectFrom(CATEGORIES, c.category, (v) => { c.category = v; })),
         el("button", { class: "hcsa-toggle" + (c.hcsa ? " on" : ""), onclick: () => { c.hcsa = !c.hcsa; render(); } }, [
           el("span", { class: "box" }, c.hcsa ? "\u2713" : ""), "Flag as HCSA / reimbursable"
@@ -389,6 +430,22 @@ function renderCapture() {
   ]);
 }
 function field(text, input) { return el("label", {}, [text, input]); }
+
+function renderManageCards() {
+  return el("section", { class: "panel" }, [
+    el("div", { class: "manage-head" }, [
+      el("h2", { class: "manage-h" }, "Your cards"),
+      el("button", { class: "btn ghost", onclick: () => { state.view = "list"; render(); } }, "Done")
+    ]),
+    el("p", { class: "gate-note" }, "Delete junk entries here. A card's \u2022\u2022last-4 is learned automatically the first time you link it on a receipt."),
+    CARDS.length
+      ? el("ul", { class: "card-list" }, CARDS.map((c) => el("li", { class: "card-row" }, [
+          el("span", {}, [c.name, c.last4 ? el("span", { class: "r-card" }, " \u00b7\u00b7" + c.last4) : null]),
+          el("button", { class: "link danger", onclick: async () => { if (confirm("Remove card \"" + c.name + "\"?")) { await removeCard(c.name); render(); } } }, "Remove")
+        ])))
+      : el("p", { class: "gate-note" }, "No cards yet \u2014 they're added as you use them.")
+  ]);
+}
 
 function renderReceipt(r) {
   const li = el("li", { class: "receipt" + (r.hcsa ? " is-hcsa" : "") });
