@@ -114,3 +114,26 @@ footer.tools .spacer{ margin-left:auto; }
 .manage-h{ font-size:17px; margin:0; }
 .card-list{ list-style:none; margin:12px 0 0; padding:0; display:flex; flex-direction:column; gap:2px; }
 .card-row{ display:flex; align-items:center; justify-content:space-between; padding:11px 2px; border-bottom:1px solid var(--rule); font-weight:600; }
+
+/* ---- card tokens + link row + danger zone ---- */
+.link-row{ display:flex; flex-direction:column; gap:8px; background:#FCFBF8; border:1px solid var(--rule); border-radius:8px; padding:10px; }
+.link-label{ font-size:15px; border:1px solid var(--rule); border-radius:8px; padding:9px 10px; font-family:inherit; }
+.link-actions{ display:flex; gap:8px; }
+.link-actions .btn{ flex:1; }
+.card-block{ border-bottom:1px solid var(--rule); padding:10px 0; }
+.card-row{ display:flex; align-items:center; justify-content:space-between; }
+.card-name{ font-weight:700; }
+.token-list{ list-style:none; margin:8px 0 0; padding:0 0 0 6px; display:flex; flex-direction:column; gap:4px; }
+.token-row{ display:flex; align-items:center; gap:10px; font-size:13px; }
+.token-row .token-label{ color:var(--muted); flex:1; }
+.token-empty{ font-size:12px; color:var(--muted); margin:6px 0 0 6px; }
+.r-pay{ margin:10px 0 0; font-size:13px; color:var(--teal-deep); }
+.danger-zone{ margin-top:20px; padding-top:14px; border-top:1px solid #E7C9C4; }
+.dz-h{ font-size:14px; color:var(--danger); margin:0 0 4px; }
+.danger-btn{ background:var(--danger); color:#fff; }
+
+/* ---- currency toggle ---- */
+.seg{ display:flex; gap:0; border:1px solid var(--rule); border-radius:8px; overflow:hidden; width:fit-content; }
+.seg-btn{ background:#fff; border:none; padding:9px 16px; font-size:14px; font-weight:600; color:var(--muted); cursor:pointer; font-family:inherit; }
+.seg-btn + .seg-btn{ border-left:1px solid var(--rule); }
+.seg-btn.on{ background:var(--teal); color:#fff; }
