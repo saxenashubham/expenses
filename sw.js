@@ -1,5 +1,5 @@
 // Bump VERSION on every change to app files so updates actually ship.
-const VERSION = "rl-shared-v1";
+const VERSION = "rl-shared-v2";
 const SHELL = [
   "./index.html", "./styles.css", "./app.js", "./firebase-config.js",
   "./manifest.webmanifest", "./icon-192.png", "./icon-512.png"
