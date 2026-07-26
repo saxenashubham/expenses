@@ -37,7 +37,12 @@ const el = (tag, props = {}, kids = []) => {
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 const todayISO = () => new Date().toISOString().slice(0, 10);
 const num = (a) => { const n = parseFloat(String(a).replace(/[^0-9.\-]/g, "")); return isNaN(n) ? null : n; };
-const money = (a) => { const n = num(a); return n == null ? "\u2014" : "$" + n.toFixed(2); };
+function money(a, cur) {
+  const n = num(a); if (n == null) return "\u2014";
+  cur = cur === "INR" ? "INR" : "USD";
+  try { return new Intl.NumberFormat(cur === "INR" ? "en-IN" : "en-US", { style: "currency", currency: cur, maximumFractionDigits: 2 }).format(n); }
+  catch (e) { return (cur === "INR" ? "\u20b9" : "$") + n.toFixed(2); }
+}
 const firstName = (s) => (s || "").split(/[\s@]/)[0] || "?";
 
 const CATEGORIES = ["Medical", "Food", "Groceries", "Travel", "Vehicle", "Shopping", "Utilities", "Other"];
@@ -115,7 +120,7 @@ const state = {
   screen: "loading",   // loading | signin | denied | ledger
   view: "list",        // list | capture
   cap: null,
-  flt: { from: "", to: "", card: "", category: "", owner: "", hcsaOnly: false, text: "" },
+  flt: { from: "", to: "", card: "", token: "", category: "", currency: "", owner: "", hcsaOnly: false, text: "" },
   openId: null
 };
 
@@ -155,39 +160,64 @@ function subscribe() {
 }
 
 function cardNames() { return CARDS.map((c) => c.name); }
-function cardByLast4(l4) { return l4 ? CARDS.find((c) => c.last4 === l4) : null; }
+function tokensOf(c) { return (c && c.tokens) || []; }
+function allTokenLabels() {
+  const s = new Set();
+  CARDS.forEach((c) => tokensOf(c).forEach((t) => t.label && s.add(t.label)));
+  return [...s].sort();
+}
+function cardByLast4(l4) {
+  if (!l4) return null;
+  for (const c of CARDS) { const t = tokensOf(c).find((x) => x.last4 === l4); if (t) return { card: c, token: t }; }
+  return null;
+}
 function normalizeCards(raw) {
   const out = [], seen = new Set();
   (raw || []).forEach((entry) => {
-    let name = "", last4 = "";
+    let name = "", tokens = [];
     if (typeof entry === "string") name = entry;
-    else if (entry && entry.name) { name = entry.name; last4 = (entry.last4 || "").replace(/\D/g, "").slice(-4); }
-    else return;
+    else if (entry && entry.name) {
+      name = entry.name;
+      if (Array.isArray(entry.tokens)) tokens = entry.tokens.map((t) => ({ last4: (t.last4 || "").replace(/\D/g, "").slice(-4), label: (t.label || "").trim() })).filter((t) => t.last4);
+      else if (entry.last4) tokens = [{ last4: (entry.last4 || "").replace(/\D/g, "").slice(-4), label: "" }].filter((t) => t.last4); // migrate old single last4
+    } else return;
     name = name.trim();
-    if (/^[\u2022\s]*\d{2,4}$/.test(name)) return; // drop junk digit-only "cards" the old build created
+    if (/^[\u2022\s]*\d{2,4}$/.test(name)) return; // drop junk digit-only "cards"
     if (!name || seen.has(name)) return;
-    seen.add(name); out.push({ name, last4 });
+    seen.add(name); out.push({ name, tokens });
   });
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
 async function persistCards() { try { await setDoc(doc(db, "meta", "cards"), { cards: CARDS }, { merge: false }); } catch (e) { console.error(e); } }
 async function addCard(name) {
   name = (name || "").trim(); if (!name) return "";
-  if (!CARDS.some((c) => c.name === name)) { CARDS = [...CARDS, { name, last4: "" }].sort((a, b) => a.name.localeCompare(b.name)); await persistCards(); }
+  if (!CARDS.some((c) => c.name === name)) { CARDS = [...CARDS, { name, tokens: [] }].sort((a, b) => a.name.localeCompare(b.name)); await persistCards(); }
   return name;
 }
-async function linkLast4(name, last4) {
-  last4 = (last4 || "").replace(/\D/g, "").slice(-4); if (!name || !last4) return;
-  const c = CARDS.find((x) => x.name === name);
-  if (c) c.last4 = last4; else CARDS = [...CARDS, { name, last4 }].sort((a, b) => a.name.localeCompare(b.name));
+async function linkToken(cardName, last4, label) {
+  last4 = (last4 || "").replace(/\D/g, "").slice(-4); if (!cardName || !last4) return;
+  let c = CARDS.find((x) => x.name === cardName);
+  if (!c) { c = { name: cardName, tokens: [] }; CARDS = [...CARDS, c].sort((a, b) => a.name.localeCompare(b.name)); }
+  const existing = tokensOf(c).find((t) => t.last4 === last4);
+  if (existing) { if (label) existing.label = label.trim(); }
+  else c.tokens = [...tokensOf(c), { last4, label: (label || "").trim() }];
   await persistCards();
 }
+async function removeToken(cardName, last4) {
+  const c = CARDS.find((x) => x.name === cardName); if (!c) return;
+  c.tokens = tokensOf(c).filter((t) => t.last4 !== last4); await persistCards();
+}
 async function removeCard(name) { CARDS = CARDS.filter((c) => c.name !== name); await persistCards(); }
+async function deleteAllReceipts() {
+  for (const r of [...RECEIPTS]) {
+    try { if (r.imagePath) await deleteObject(ref(storage, r.imagePath)).catch(() => {}); await deleteDoc(doc(db, "receipts", r.id)); } catch (e) { console.error(e); }
+  }
+}
 
 // ---------- capture ----------
 function startCapture() {
   state.view = "capture";
-  state.cap = { img: null, date: todayISO(), merchant: "", amount: "", card: "", last4: "", linkLast4: "", category: "Other", hcsa: false, note: "", reading: false, err: false, addingCard: false, loadingPdf: false, saving: false };
+  state.cap = { img: null, date: todayISO(), merchant: "", amount: "", currency: "USD", card: "", last4: "", tokenLabel: "", linkLast4: "", linkLabel: "", category: "Other", hcsa: false, note: "", reading: false, err: false, addingCard: false, loadingPdf: false, saving: false };
   render();
 }
 function onFileInput(ev) { const f = ev.target.files && ev.target.files[0]; ev.target.value = ""; if (f) processFile(f); }
@@ -208,8 +238,8 @@ async function processFile(file) {
         state.cap.merchant = r.merchant || "";
         state.cap.amount = r.amount ? String(r.amount).replace(/[^0-9.]/g, "") : "";
         state.cap.last4 = (r.last4 || "").replace(/\D/g, "").slice(-4);
-        const match = cardByLast4(state.cap.last4);
-        if (match) { state.cap.card = match.name; state.cap.linkLast4 = ""; }
+        const m = cardByLast4(state.cap.last4);
+        if (m) { state.cap.card = m.card.name; state.cap.tokenLabel = m.token.label || ""; state.cap.linkLast4 = ""; }
         else if (state.cap.last4) { state.cap.linkLast4 = state.cap.last4; }
         state.cap.category = (r.category && CATEGORIES.includes(r.category)) ? r.category : (guessCategory(state.cap.merchant) || "Other");
       } catch (e) { state.cap.err = true; }
@@ -227,8 +257,8 @@ async function saveCapture() {
     await uploadString(ref(storage, path), c.img, "data_url");
     const imageUrl = await getDownloadURL(ref(storage, path));
     await setDoc(doc(db, "receipts", id), {
-      date: c.date || todayISO(), merchant: c.merchant.trim(), amount: c.amount,
-      card: c.card.trim(), last4: (c.last4 || "").replace(/\D/g, "").slice(-4),
+      date: c.date || todayISO(), merchant: c.merchant.trim(), amount: c.amount, currency: c.currency === "INR" ? "INR" : "USD",
+      card: c.card.trim(), last4: (c.last4 || "").replace(/\D/g, "").slice(-4), tokenLabel: (c.tokenLabel || "").trim(),
       category: CATEGORIES.includes(c.category) ? c.category : "Other",
       hcsa: !!c.hcsa, note: c.note.trim(),
       imagePath: path, imageUrl,
@@ -259,6 +289,8 @@ function filtered() {
     if (f.from && (r.date || "") < f.from) return false;
     if (f.to && (r.date || "") > f.to) return false;
     if (f.card && r.card !== f.card) return false;
+    if (f.token && (r.tokenLabel || "") !== f.token) return false;
+    if (f.currency && (r.currency === "INR" ? "INR" : "USD") !== f.currency) return false;
     if (f.category && (r.category || "Other") !== f.category) return false;
     if (f.owner === "mine" && (r.ownerEmail || "") !== (USER.email || "").toLowerCase()) return false;
     if (f.owner === "partner" && (r.ownerEmail || "") !== otherEmail()) return false;
@@ -269,8 +301,8 @@ function filtered() {
 }
 function exportCsv() {
   const esc = (s) => '"' + String(s == null ? "" : s).replace(/"/g, '""') + '"';
-  const rows = [["date", "merchant", "amount", "category", "card", "last4", "hcsa", "added_by", "note", "image_url"]];
-  filtered().forEach((r) => rows.push([r.date, r.merchant, r.amount, r.category || "Other", r.card, r.last4 || "", r.hcsa ? "yes" : "", r.ownerName || r.ownerEmail || "", r.note, r.imageUrl || ""]));
+  const rows = [["date", "merchant", "amount", "currency", "category", "card", "token", "last4", "hcsa", "added_by", "note", "image_url"]];
+  filtered().forEach((r) => rows.push([r.date, r.merchant, r.amount, r.currency || "USD", r.category || "Other", r.card, r.tokenLabel || "", r.last4 || "", r.hcsa ? "yes" : "", r.ownerName || r.ownerEmail || "", r.note, r.imageUrl || ""]));
   const url = URL.createObjectURL(new Blob([rows.map((x) => x.map(esc).join(",")).join("\n")], { type: "text/csv" }));
   const a = el("a", { href: url, download: "receipt-ledger.csv" }); a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
@@ -299,22 +331,26 @@ function render() {
       labelInput("From", el("input", { class: "mono", type: "date", value: state.flt.from, oninput: (e) => { state.flt.from = e.target.value; render(); } }), "from"),
       labelInput("To", el("input", { class: "mono", type: "date", value: state.flt.to, oninput: (e) => { state.flt.to = e.target.value; render(); } }), "to"),
       labelInput("Card", selectFrom(["", ...cards], state.flt.card, (v) => { state.flt.card = v; render(); }, "Any"), "card"),
-      labelInput("Category", selectFrom(["", ...CATEGORIES], state.flt.category, (v) => { state.flt.category = v; render(); }, "Any"), "card")
+      labelInput("Category", selectFrom(["", ...CATEGORIES], state.flt.category, (v) => { state.flt.category = v; render(); }, "Any"), "card"),
+      allTokenLabels().length ? labelInput("Token / phone", selectFrom(["", ...allTokenLabels()], state.flt.token, (v) => { state.flt.token = v; render(); }, "Any"), "card") : null
     ]),
     el("div", { class: "f-row" }, [
       labelInput("Search", el("input", { value: state.flt.text, placeholder: "merchant or note", oninput: (e) => { state.flt.text = e.target.value; render(); } }), "grow"),
       ownerChips(),
+      curChips(),
       el("button", { class: "chip" + (state.flt.hcsaOnly ? " on" : ""), onclick: () => { state.flt.hcsaOnly = !state.flt.hcsaOnly; render(); } }, "HCSA only"),
-      (state.flt.from || state.flt.to || state.flt.card || state.flt.category || state.flt.owner || state.flt.hcsaOnly || state.flt.text)
-        ? el("button", { class: "link", onclick: () => { state.flt = { from: "", to: "", card: "", category: "", owner: "", hcsaOnly: false, text: "" }; render(); } }, "Clear") : null
+      (state.flt.from || state.flt.to || state.flt.card || state.flt.token || state.flt.category || state.flt.currency || state.flt.owner || state.flt.hcsaOnly || state.flt.text)
+        ? el("button", { class: "link", onclick: () => { state.flt = { from: "", to: "", card: "", token: "", category: "", currency: "", owner: "", hcsaOnly: false, text: "" }; render(); } }, "Clear") : null
     ])
   ]));
 
   const list = filtered();
-  const total = list.reduce((s, r) => s + (num(r.amount) || 0), 0);
+  const totals = {};
+  list.forEach((r) => { const cur = r.currency === "INR" ? "INR" : "USD"; totals[cur] = (totals[cur] || 0) + (num(r.amount) || 0); });
+  const totalStr = Object.keys(totals).length ? Object.keys(totals).sort().map((cur) => money(totals[cur], cur)).join("  \u00b7  ") : money(0, "USD");
   root.append(el("div", { class: "summary" }, [
     el("span", {}, list.length + " receipt" + (list.length === 1 ? "" : "s")),
-    el("span", { class: "mono" }, money(total)),
+    el("span", { class: "mono" }, totalStr),
     RECEIPTS.length ? el("button", { class: "link spacer", onclick: exportCsv }, "Export CSV") : el("span", { class: "spacer" })
   ]));
 
@@ -369,29 +405,47 @@ function ownerChips() {
     el("button", { class: "chip" + (state.flt.owner === "partner" ? " on" : ""), onclick: () => set("partner") }, firstName(otherEmail()))
   ]);
 }
+function curChips() {
+  const set = (v) => { state.flt.currency = state.flt.currency === v ? "" : v; render(); };
+  return el("span", { class: "owner-chips" }, [
+    el("button", { class: "chip" + (state.flt.currency === "USD" ? " on" : ""), onclick: () => set("USD") }, "$"),
+    el("button", { class: "chip" + (state.flt.currency === "INR" ? " on" : ""), onclick: () => set("INR") }, "\u20b9")
+  ]);
+}
 function renderCardPicker(c) {
   if (c.addingCard) {
     let val = "";
     return el("div", { class: "card-add" }, [
       el("input", { placeholder: "New card name (e.g. Chase Sapphire)", oninput: (e) => val = e.target.value }),
-      el("button", { class: "btn primary", onclick: async () => { const n = await addCard(val); if (n) { c.card = n; if (c.linkLast4) { await linkLast4(n, c.linkLast4); c.linkLast4 = ""; } } c.addingCard = false; render(); } }, "Add"),
+      el("button", { class: "btn primary", onclick: async () => { const n = await addCard(val); if (n) c.card = n; c.addingCard = false; render(); } }, "Add"),
       el("button", { class: "btn ghost", onclick: () => { c.addingCard = false; render(); } }, "Cancel")
     ]);
   }
   const s = el("select", {
-    onchange: async (e) => {
+    onchange: (e) => {
       const v = e.target.value;
       if (v === "__add__") { c.addingCard = true; }
-      else { c.card = v; if (v && c.linkLast4) { await linkLast4(v, c.linkLast4); c.linkLast4 = ""; } }
+      else { c.card = v; if (!c.linkLast4) c.tokenLabel = ""; }
       render();
     }
   }, [
     el("option", { value: "" }, "Select a card"),
-    ...CARDS.map((x) => el("option", { value: x.name }, x.name + (x.last4 ? "  \u00b7\u00b7" + x.last4 : ""))),
+    ...CARDS.map((x) => el("option", { value: x.name }, x.name + (tokensOf(x).length ? "  (" + tokensOf(x).length + ")" : ""))),
     el("option", { value: "__add__" }, "\u2795 Add a card\u2026")
   ]);
   s.value = cardNames().includes(c.card) ? c.card : "";
   return s;
+}
+function renderLinkRow(c) {
+  const canRemember = !!c.card && cardNames().includes(c.card);
+  return el("div", { class: "link-row" }, [
+    el("div", { class: "detect-note" }, "Receipt shows \u2022\u2022" + c.linkLast4 + " \u2014 if that's a real card, pick the card above, label the token, and remember it:"),
+    el("input", { class: "link-label", value: c.linkLabel, placeholder: "token label (e.g. Apple Pay \u2013 wife's phone)", oninput: (e) => c.linkLabel = e.target.value }),
+    el("div", { class: "link-actions" }, [
+      el("button", { class: "btn primary", ...(canRemember ? {} : { disabled: "disabled" }), onclick: async () => { await linkToken(c.card, c.linkLast4, c.linkLabel); c.tokenLabel = (c.linkLabel || "").trim(); c.linkLast4 = ""; c.linkLabel = ""; render(); } }, canRemember ? "Remember on " + c.card : "Pick a card first"),
+      el("button", { class: "btn ghost", onclick: () => { c.linkLast4 = ""; c.last4 = ""; c.linkLabel = ""; render(); } }, "Not a card")
+    ])
+  ]);
 }
 
 function renderCapture() {
@@ -412,10 +466,15 @@ function renderCapture() {
         field("Date", el("input", { class: "mono", type: "date", value: c.date, oninput: (e) => c.date = e.target.value })),
         field("Merchant", el("input", { value: c.merchant, placeholder: "e.g. Corner Pharmacy", oninput: (e) => c.merchant = e.target.value })),
         field("Amount", el("input", { class: "mono", value: c.amount, placeholder: "0.00", inputmode: "decimal", oninput: (e) => c.amount = e.target.value })),
+        field("Currency", el("div", { class: "seg" }, [
+          el("button", { class: "seg-btn" + (c.currency !== "INR" ? " on" : ""), onclick: () => { c.currency = "USD"; render(); } }, "$ USD"),
+          el("button", { class: "seg-btn" + (c.currency === "INR" ? " on" : ""), onclick: () => { c.currency = "INR"; render(); } }, "\u20b9 INR")
+        ])),
         field("Card used", renderCardPicker(c)),
-        c.linkLast4
-          ? el("div", { class: "detect-note" }, "Receipt shows \u2022\u2022" + c.linkLast4 + " \u2014 pick the card and I'll remember it next time")
-          : (c.last4 && cardByLast4(c.last4)) ? el("div", { class: "detect-note ok" }, "Recognized \u2022\u2022" + c.last4 + " \u2192 " + cardByLast4(c.last4).name) : null,
+        c.linkLast4 ? renderLinkRow(c)
+          : (c.last4 && cardByLast4(c.last4))
+            ? el("div", { class: "detect-note ok" }, "Recognized \u2022\u2022" + c.last4 + " \u2192 " + cardByLast4(c.last4).card.name + (cardByLast4(c.last4).token.label ? " (" + cardByLast4(c.last4).token.label + ")" : ""))
+            : null,
         field("Category", selectFrom(CATEGORIES, c.category, (v) => { c.category = v; })),
         el("button", { class: "hcsa-toggle" + (c.hcsa ? " on" : ""), onclick: () => { c.hcsa = !c.hcsa; render(); } }, [
           el("span", { class: "box" }, c.hcsa ? "\u2713" : ""), "Flag as HCSA / reimbursable"
@@ -437,14 +496,35 @@ function renderManageCards() {
       el("h2", { class: "manage-h" }, "Your cards"),
       el("button", { class: "btn ghost", onclick: () => { state.view = "list"; render(); } }, "Done")
     ]),
-    el("p", { class: "gate-note" }, "Delete junk entries here. A card's \u2022\u2022last-4 is learned automatically the first time you link it on a receipt."),
+    el("p", { class: "gate-note" }, "One card can hold several \u2022\u2022last-4 tokens \u2014 physical, Apple Pay, a phone. Tokens are learned when you link them on a receipt; any receipt printing one of them auto-selects this card."),
     CARDS.length
-      ? el("ul", { class: "card-list" }, CARDS.map((c) => el("li", { class: "card-row" }, [
-          el("span", {}, [c.name, c.last4 ? el("span", { class: "r-card" }, " \u00b7\u00b7" + c.last4) : null]),
-          el("button", { class: "link danger", onclick: async () => { if (confirm("Remove card \"" + c.name + "\"?")) { await removeCard(c.name); render(); } } }, "Remove")
+      ? el("ul", { class: "card-list" }, CARDS.map((c) => el("li", { class: "card-block" }, [
+          el("div", { class: "card-row" }, [
+            el("span", { class: "card-name" }, c.name),
+            el("button", { class: "link danger", onclick: async () => { if (confirm("Remove card \"" + c.name + "\" and all its tokens?")) { await removeCard(c.name); render(); } } }, "Remove card")
+          ]),
+          tokensOf(c).length
+            ? el("ul", { class: "token-list" }, tokensOf(c).map((t) => el("li", { class: "token-row" }, [
+                el("span", { class: "mono" }, "\u2022\u2022" + t.last4),
+                el("span", { class: "token-label" }, t.label || "(no label)"),
+                el("button", { class: "link danger", onclick: async () => { await removeToken(c.name, t.last4); render(); } }, "\u00d7")
+              ])))
+            : el("p", { class: "token-empty" }, "no tokens yet")
         ])))
-      : el("p", { class: "gate-note" }, "No cards yet \u2014 they're added as you use them.")
+      : el("p", { class: "gate-note" }, "No cards yet \u2014 they're added as you use them."),
+    el("div", { class: "danger-zone" }, [
+      el("h3", { class: "dz-h" }, "Danger zone"),
+      el("p", { class: "gate-note" }, "Export first (from the list screen). This deletes every receipt for both of you, including the images, and cannot be undone."),
+      el("button", { class: "btn danger-btn", onclick: doDeleteAll }, "Delete ALL receipts")
+    ])
   ]);
+}
+async function doDeleteAll() {
+  if (!RECEIPTS.length) { alert("There are no receipts to delete."); return; }
+  if (!confirm("Delete ALL " + RECEIPTS.length + " receipts for BOTH of you, permanently? Images are deleted too.")) return;
+  if (!confirm("Last check \u2014 this is irreversible. Really delete everything?")) return;
+  await deleteAllReceipts();
+  render();
 }
 
 function renderReceipt(r) {
@@ -460,11 +540,12 @@ function renderReceipt(r) {
         el("span", { class: "r-owner" }, firstName(r.ownerName || r.ownerEmail))
       ])
     ]),
-    el("span", { class: "r-amt mono" }, money(r.amount))
+    el("span", { class: "r-amt mono" }, money(r.amount, r.currency))
   ]));
   if (state.openId === r.id) {
     li.append(el("div", { class: "r-detail" }, [
       r.imageUrl ? el("img", { src: r.imageUrl, alt: "receipt" }) : el("div", { class: "reading" }, "No image."),
+      (r.card || r.tokenLabel || r.last4) ? el("p", { class: "r-pay mono" }, "Paid: " + (r.card || "\u2014") + (r.tokenLabel ? " \u00b7 " + r.tokenLabel : "") + (r.last4 ? " \u00b7 \u2022\u2022" + r.last4 : "")) : null,
       r.note ? el("p", { class: "r-note" }, r.note) : null,
       el("div", { class: "r-detail-actions" }, [
         r.imageUrl ? el("a", { class: "link", href: r.imageUrl, target: "_blank", rel: "noopener", download: "" }, "Download image") : null,
