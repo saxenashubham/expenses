@@ -4,7 +4,7 @@ import {
   getRedirectResult, signOut, onAuthStateChanged
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import {
-  initializeFirestore, persistentLocalCache, collection, doc, setDoc,
+  initializeFirestore, persistentLocalCache, collection, doc, setDoc, updateDoc, deleteField, FieldPath,
   deleteDoc, onSnapshot, query, orderBy, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import {
@@ -151,10 +151,12 @@ function subscribe() {
   }, (err) => { console.error(err); });
   unsubCards = onSnapshot(doc(db, "meta", "cards"), (d) => {
     const data = d.exists() ? d.data() : {};
-    const norm = normalizeCards(data.cards || data.list || []);
-    const changed = JSON.stringify(norm) !== JSON.stringify(data.cards || null);
-    CARDS = norm;
-    if (changed) persistCards(); // one-time cleanup: purge junk + drop legacy 'list' field
+    if (data.cards && !Array.isArray(data.cards)) {
+      CARDS = cardsMapToArray(data.cards);           // current shape: a keyed map
+    } else {
+      CARDS = normalizeCards(data.cards || data.list || []); // legacy array/list shape
+      if (data.cards || data.list) migrateCardsToMap();      // one-time convert to map
+    }
     if (state.screen === "ledger") render();
   }, (err) => { console.error(err); });
 }
@@ -188,26 +190,50 @@ function normalizeCards(raw) {
   });
   return out.sort((a, b) => a.name.localeCompare(b.name));
 }
-async function persistCards() { try { await setDoc(doc(db, "meta", "cards"), { cards: CARDS }, { merge: false }); } catch (e) { console.error(e); } }
+// ---- card store: a keyed map at meta/cards -> { cards: { <name>: { tokens: { <last4>: {label} } } } }
+// In memory we keep the array shape the UI already uses; only reads/writes change.
+function cardsMapToArray(map) {
+  return Object.entries(map || {})
+    .map(([name, v]) => ({
+      name,
+      tokens: Object.entries((v && v.tokens) || {})
+        .map(([last4, t]) => ({ last4: String(last4).replace(/\D/g, "").slice(-4), label: (t && t.label) || "" }))
+        .filter((t) => t.last4)
+        .sort((a, b) => a.last4.localeCompare(b.last4))
+    }))
+    .filter((c) => c.name && !/^[\u2022\s]*\d{2,4}$/.test(c.name))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+function arrayToCardsMap(arr) {
+  const m = {};
+  arr.forEach((c) => { const t = {}; (c.tokens || []).forEach((tok) => { if (tok.last4) t[tok.last4] = { label: tok.label || "" }; }); m[c.name] = { tokens: t }; });
+  return m;
+}
+async function migrateCardsToMap() {
+  try { await setDoc(doc(db, "meta", "cards"), { cards: arrayToCardsMap(CARDS) }, { merge: false }); } catch (e) { console.error(e); }
+}
+const cardsRef = () => doc(db, "meta", "cards");
+
 async function addCard(name) {
   name = (name || "").trim(); if (!name) return "";
-  if (!CARDS.some((c) => c.name === name)) { CARDS = [...CARDS, { name, tokens: [] }].sort((a, b) => a.name.localeCompare(b.name)); await persistCards(); }
+  if (!CARDS.some((c) => c.name === name)) {
+    try { await setDoc(cardsRef(), { cards: { [name]: { tokens: {} } } }, { merge: true }); } catch (e) { console.error(e); }
+  }
   return name;
 }
 async function linkToken(cardName, last4, label) {
   last4 = (last4 || "").replace(/\D/g, "").slice(-4); if (!cardName || !last4) return;
-  let c = CARDS.find((x) => x.name === cardName);
-  if (!c) { c = { name: cardName, tokens: [] }; CARDS = [...CARDS, c].sort((a, b) => a.name.localeCompare(b.name)); }
-  const existing = tokensOf(c).find((t) => t.last4 === last4);
-  if (existing) { if (label) existing.label = label.trim(); }
-  else c.tokens = [...tokensOf(c), { last4, label: (label || "").trim() }];
-  await persistCards();
+  // deep-merge writes only this token's label; sibling tokens/cards untouched.
+  try { await setDoc(cardsRef(), { cards: { [cardName]: { tokens: { [last4]: { label: (label || "").trim() } } } } }, { merge: true }); } catch (e) { console.error(e); }
 }
 async function removeToken(cardName, last4) {
-  const c = CARDS.find((x) => x.name === cardName); if (!c) return;
-  c.tokens = tokensOf(c).filter((t) => t.last4 !== last4); await persistCards();
+  last4 = (last4 || "").replace(/\D/g, "").slice(-4); if (!cardName || !last4) return;
+  try { await updateDoc(cardsRef(), new FieldPath("cards", cardName, "tokens", last4), deleteField()); } catch (e) { console.error(e); }
 }
-async function removeCard(name) { CARDS = CARDS.filter((c) => c.name !== name); await persistCards(); }
+async function removeCard(name) {
+  if (!name) return;
+  try { await updateDoc(cardsRef(), new FieldPath("cards", name), deleteField()); } catch (e) { console.error(e); }
+}
 async function deleteAllReceipts() {
   for (const r of [...RECEIPTS]) {
     try { if (r.imagePath) await deleteObject(ref(storage, r.imagePath)).catch(() => {}); await deleteDoc(doc(db, "receipts", r.id)); } catch (e) { console.error(e); }
