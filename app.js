@@ -127,8 +127,9 @@ const state = {
   view: "list",        // list | capture | cards
   cap: null,
   flt: { from: monthRange().from, to: monthRange().to, card: "", token: "", category: "", currency: "", owner: "", hcsaOnly: false, text: "" },
-  sort: { by: "date", dir: "desc" },   // by: date | amount | added
+  sort: { by: "date", dir: "desc" },   // by: date | amount
   openId: null,
+  filtersOpen: false,  // collapsible filter panel, default collapsed
   edit: null,          // { id, date, amount, category } when editing a receipt
   page: 1,
   fltSig: ""
@@ -407,27 +408,37 @@ function render() {
   if (state.view === "cards") return root.append(renderManageCards());
 
   const cards = cardNames();
-  root.append(el("section", { class: "filters" }, [
-    el("div", { class: "f-row" }, [
-      labelInput("From", el("input", { class: "mono", type: "date", value: state.flt.from, oninput: (e) => { state.flt.from = e.target.value; render(); } }), "from"),
-      labelInput("To", el("input", { class: "mono", type: "date", value: state.flt.to, oninput: (e) => { state.flt.to = e.target.value; render(); } }), "to"),
-      labelInput("Card", selectFrom(["", ...cards], state.flt.card, (v) => { state.flt.card = v; render(); }, "Any"), "card"),
-      labelInput("Category", selectFrom(["", ...CATEGORIES], state.flt.category, (v) => { state.flt.category = v; render(); }, "Any"), "card"),
-      allTokenLabels().length ? labelInput("Token / phone", selectFrom(["", ...allTokenLabels()], state.flt.token, (v) => { state.flt.token = v; render(); }, "Any"), "card") : null,
-      el("label", { class: "f card" }, ["Range", el("div", { class: "scope-btns" }, [
-        el("button", { class: "chip" + (isThisMonth() ? " on" : ""), onclick: () => { const mr = monthRange(); state.flt.from = mr.from; state.flt.to = mr.to; render(); } }, "This month"),
-        el("button", { class: "chip" + ((!state.flt.from && !state.flt.to) ? " on" : ""), onclick: () => { state.flt.from = ""; state.flt.to = ""; render(); } }, "All dates")
-      ])])
+  // ---- collapsible filter panel (default collapsed); date chips + sort stay outside ----
+  const summ = activeFilterSummary();
+  root.append(el("div", { class: "filter-bar" }, [
+    el("button", { class: "filter-toggle" + (state.filtersOpen ? " open" : ""), onclick: () => { state.filtersOpen = !state.filtersOpen; render(); } }, [
+      el("span", {}, (state.filtersOpen ? "\u2715 " : "\u2699 ") + "Filters"),
+      summ.length ? el("span", { class: "filter-count" }, String(summ.length)) : null
     ]),
-    el("div", { class: "f-row" }, [
-      labelInput("Search", el("input", { value: state.flt.text, placeholder: "merchant or note", oninput: (e) => { state.flt.text = e.target.value; render(); } }), "grow"),
-      ownerChips(),
-      curChips(),
-      el("button", { class: "chip" + (state.flt.hcsaOnly ? " on" : ""), onclick: () => { state.flt.hcsaOnly = !state.flt.hcsaOnly; render(); } }, "HCSA only"),
-      (state.flt.from || state.flt.to || state.flt.card || state.flt.token || state.flt.category || state.flt.currency || state.flt.owner || state.flt.hcsaOnly || state.flt.text)
-        ? el("button", { class: "link", onclick: () => { const mr = monthRange(); state.flt = { from: mr.from, to: mr.to, card: "", token: "", category: "", currency: "", owner: "", hcsaOnly: false, text: "" }; render(); } }, "Reset") : null
+    el("span", { class: "filter-summary" + (summ.length ? "" : " muted") }, summ.length ? summ.join(" \u00b7 ") : "no filters"),
+    el("span", { class: "scope-btns bar-scope" }, [
+      el("button", { class: "chip" + (isThisMonth() ? " on" : ""), onclick: () => { const mr = monthRange(); state.flt.from = mr.from; state.flt.to = mr.to; render(); } }, "This month"),
+      el("button", { class: "chip" + ((!state.flt.from && !state.flt.to) ? " on" : ""), onclick: () => { state.flt.from = ""; state.flt.to = ""; render(); } }, "All dates")
     ])
   ]));
+  if (state.filtersOpen) {
+    root.append(el("section", { class: "filters" }, [
+      el("div", { class: "f-row" }, [
+        labelInput("From", el("input", { class: "mono", type: "date", value: state.flt.from, oninput: (e) => { state.flt.from = e.target.value; render(); } }), "from"),
+        labelInput("To", el("input", { class: "mono", type: "date", value: state.flt.to, oninput: (e) => { state.flt.to = e.target.value; render(); } }), "to"),
+        labelInput("Card", selectFrom(["", ...cards], state.flt.card, (v) => { state.flt.card = v; render(); }, "Any"), "card"),
+        labelInput("Category", selectFrom(["", ...CATEGORIES], state.flt.category, (v) => { state.flt.category = v; render(); }, "Any"), "card"),
+        allTokenLabels().length ? labelInput("Token / phone", selectFrom(["", ...allTokenLabels()], state.flt.token, (v) => { state.flt.token = v; render(); }, "Any"), "card") : null
+      ]),
+      el("div", { class: "f-row" }, [
+        labelInput("Search", el("input", { value: state.flt.text, placeholder: "merchant or note", oninput: (e) => { state.flt.text = e.target.value; render(); } }), "grow"),
+        ownerChips(),
+        curChips(),
+        el("button", { class: "chip" + (state.flt.hcsaOnly ? " on" : ""), onclick: () => { state.flt.hcsaOnly = !state.flt.hcsaOnly; render(); } }, "HCSA only"),
+        summ.length ? el("button", { class: "link", onclick: () => { state.flt = { ...state.flt, card: "", token: "", category: "", currency: "", owner: "", hcsaOnly: false, text: "" }; render(); } }, "Clear filters") : null
+      ])
+    ]));
+  }
 
   const list = filtered();
   const totals = {};
@@ -511,6 +522,18 @@ function sortSelect() {
     SORT_OPTIONS.map(([v, label]) => el("option", { value: v }, label)));
   s.value = cur;
   return s;
+}
+function activeFilterSummary() {
+  const f = state.flt, parts = [];
+  if (f.card) parts.push(f.card);
+  if (f.category) parts.push(f.category);
+  if (f.token) parts.push(f.token);
+  if (f.currency) parts.push(f.currency === "INR" ? "\u20b9" : "$");
+  if (f.owner === "mine") parts.push("Mine");
+  if (f.owner === "partner") parts.push(firstName(otherEmail()));
+  if (f.hcsaOnly) parts.push("HCSA");
+  if (f.text) parts.push('"' + f.text + '"');
+  return parts;
 }
 function ownerChips() {
   const set = (v) => { state.flt.owner = state.flt.owner === v ? "" : v; render(); };

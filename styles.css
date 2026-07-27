@@ -160,3 +160,13 @@ footer.tools .spacer{ margin-left:auto; }
 /* date scope chips */
 .scope-btns{ display:flex; gap:6px; }
 .sort-sel{ font-size:13px; border:1px solid var(--rule); border-radius:7px; padding:6px 8px; background:#fff; font-family:inherit; color:var(--ink); }
+
+/* ---- collapsible filter panel (v8) ---- */
+.filter-bar{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
+.filter-toggle{ display:inline-flex; align-items:center; gap:7px; background:#fff; border:1px solid var(--rule); border-radius:8px; padding:8px 12px; font-size:14px; font-weight:600; color:var(--ink); cursor:pointer; font-family:inherit; }
+.filter-toggle.open{ background:var(--teal); color:#fff; border-color:var(--teal); }
+.filter-count{ background:var(--marker); color:#3a2f05; border-radius:10px; padding:0 7px; font-size:12px; font-weight:800; }
+.filter-toggle.open .filter-count{ background:#fff; color:#3a2f05; }
+.filter-summary{ font-size:13px; color:var(--ink); flex:1; min-width:80px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.filter-summary.muted{ color:var(--muted); }
+.bar-scope{ margin-left:auto; }
