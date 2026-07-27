@@ -137,3 +137,26 @@ footer.tools .spacer{ margin-left:auto; }
 .seg-btn{ background:#fff; border:none; padding:9px 16px; font-size:14px; font-weight:600; color:var(--muted); cursor:pointer; font-family:inherit; }
 .seg-btn + .seg-btn{ border-left:1px solid var(--rule); }
 .seg-btn.on{ background:var(--teal); color:#fff; }
+
+/* ---- HCSA bold, card colors, edit form, pager (v5) ---- */
+.tag-hcsa{ font-weight:800 !important; letter-spacing:.08em; }
+.r-card{ padding-left:8px; }
+.pager{ display:flex; align-items:center; justify-content:center; gap:14px; margin-top:16px; }
+.pager .btn{ padding:9px 14px; }
+.pager-info{ font-size:13px; color:var(--muted); min-width:110px; text-align:center; }
+.edit-form{ margin-top:12px; background:#FCFBF8; border:1px solid var(--rule); border-radius:8px; padding:12px; }
+.edit-fields{ display:flex; flex-direction:column; gap:10px; margin-bottom:10px; }
+.edit-fields label{ display:flex; flex-direction:column; gap:5px; font-size:12px; color:var(--muted); font-weight:600; }
+.edit-fields input, .edit-fields select{ font-size:16px; border:1px solid var(--rule); border-radius:8px; padding:9px 10px; background:#fff; font-family:inherit; color:var(--ink); }
+.card-name-wrap{ display:flex; align-items:center; gap:10px; }
+.card-swatch{ width:26px; height:26px; padding:0; border:1px solid var(--rule); border-radius:6px; background:none; cursor:pointer; }
+.card-row-actions{ display:flex; gap:12px; }
+
+/* ---- sort control (v6) ---- */
+.summary{ flex-wrap:wrap; }
+.sort-sel{ margin-left:auto; font-size:13px; border:1px solid var(--rule); border-radius:7px; padding:5px 8px; background:#fff; color:var(--ink); font-family:inherit; font-weight:600; }
+.summary .link{ font-weight:600; }
+
+/* date scope chips */
+.scope-btns{ display:flex; gap:6px; }
+.sort-sel{ font-size:13px; border:1px solid var(--rule); border-radius:7px; padding:6px 8px; background:#fff; font-family:inherit; color:var(--ink); }
