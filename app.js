@@ -122,6 +122,14 @@ function monthRange() {
   return { from: y + "-" + pad(m + 1) + "-01", to: y + "-" + pad(m + 1) + "-" + pad(new Date(y, m + 1, 0).getDate()) };
 }
 function isThisMonth() { const mr = monthRange(); return state.flt.from === mr.from && state.flt.to === mr.to; }
+function lastMonthRange() {
+  const d = new Date(), y = d.getFullYear(), m = d.getMonth();
+  const lm = new Date(y, m - 1, 1);            // first day of previous month
+  const ly = lm.getFullYear(), lmo = lm.getMonth();
+  const pad = (n) => String(n).padStart(2, "0");
+  return { from: ly + "-" + pad(lmo + 1) + "-01", to: ly + "-" + pad(lmo + 1) + "-" + pad(new Date(ly, lmo + 1, 0).getDate()) };
+}
+function isLastMonth() { const mr = lastMonthRange(); return state.flt.from === mr.from && state.flt.to === mr.to; }
 const state = {
   screen: "loading",   // loading | signin | denied | ledger
   view: "list",        // list | capture | cards
@@ -408,24 +416,29 @@ function render() {
   if (state.view === "cards") return root.append(renderManageCards());
 
   const cards = cardNames();
-  // ---- collapsible filter panel (default collapsed); date chips + sort stay outside ----
+  // ---- collapsible filter panel (default collapsed); summary shows the date range too ----
   const summ = activeFilterSummary();
+  const summaryText = [dateSummary(), ...summ].join(" \u00b7 ");
   root.append(el("div", { class: "filter-bar" }, [
     el("button", { class: "filter-toggle" + (state.filtersOpen ? " open" : ""), onclick: () => { state.filtersOpen = !state.filtersOpen; render(); } }, [
       el("span", {}, (state.filtersOpen ? "\u2715 " : "\u2699 ") + "Filters"),
       summ.length ? el("span", { class: "filter-count" }, String(summ.length)) : null
     ]),
-    el("span", { class: "filter-summary" + (summ.length ? "" : " muted") }, summ.length ? summ.join(" \u00b7 ") : "no filters"),
-    el("span", { class: "scope-btns bar-scope" }, [
-      el("button", { class: "chip" + (isThisMonth() ? " on" : ""), onclick: () => { const mr = monthRange(); state.flt.from = mr.from; state.flt.to = mr.to; render(); } }, "This month"),
-      el("button", { class: "chip" + ((!state.flt.from && !state.flt.to) ? " on" : ""), onclick: () => { state.flt.from = ""; state.flt.to = ""; render(); } }, "All dates")
-    ])
+    el("span", { class: "filter-summary" }, summaryText),
+    el("span", { class: "bar-sort" }, sortSelect())
   ]));
   if (state.filtersOpen) {
     root.append(el("section", { class: "filters" }, [
       el("div", { class: "f-row" }, [
         labelInput("From", el("input", { class: "mono", type: "date", value: state.flt.from, oninput: (e) => { state.flt.from = e.target.value; render(); } }), "from"),
         labelInput("To", el("input", { class: "mono", type: "date", value: state.flt.to, oninput: (e) => { state.flt.to = e.target.value; render(); } }), "to"),
+        el("label", { class: "f card" }, ["Range", el("div", { class: "scope-btns" }, [
+          el("button", { class: "chip" + (isThisMonth() ? " on" : ""), onclick: () => { const mr = monthRange(); state.flt.from = mr.from; state.flt.to = mr.to; render(); } }, "This month"),
+          el("button", { class: "chip" + (isLastMonth() ? " on" : ""), onclick: () => { const mr = lastMonthRange(); state.flt.from = mr.from; state.flt.to = mr.to; render(); } }, "Last month"),
+          el("button", { class: "chip" + ((!state.flt.from && !state.flt.to) ? " on" : ""), onclick: () => { state.flt.from = ""; state.flt.to = ""; render(); } }, "All dates")
+        ])])
+      ]),
+      el("div", { class: "f-row" }, [
         labelInput("Card", selectFrom(["", ...cards], state.flt.card, (v) => { state.flt.card = v; render(); }, "Any"), "card"),
         labelInput("Category", selectFrom(["", ...CATEGORIES], state.flt.category, (v) => { state.flt.category = v; render(); }, "Any"), "card"),
         allTokenLabels().length ? labelInput("Token / phone", selectFrom(["", ...allTokenLabels()], state.flt.token, (v) => { state.flt.token = v; render(); }, "Any"), "card") : null
@@ -457,8 +470,7 @@ function render() {
   root.append(el("div", { class: "summary" }, [
     el("span", {}, list.length + " receipt" + (list.length === 1 ? "" : "s")),
     el("span", { class: "mono" }, totalStr),
-    sortSelect(),
-    RECEIPTS.length ? el("button", { class: "link", onclick: exportCsv }, "Export CSV") : null
+    RECEIPTS.length ? el("button", { class: "link spacer", onclick: exportCsv }, "Export CSV") : el("span", { class: "spacer" })
   ]));
 
   if (!RECEIPTS.length) {
@@ -522,6 +534,15 @@ function sortSelect() {
     SORT_OPTIONS.map(([v, label]) => el("option", { value: v }, label)));
   s.value = cur;
   return s;
+}
+function dateSummary() {
+  const f = state.flt;
+  if (isThisMonth()) return "This month";
+  if (isLastMonth()) return "Last month";
+  if (!f.from && !f.to) return "All dates";
+  if (f.from && f.to) return f.from + " \u2192 " + f.to;
+  if (f.from) return "from " + f.from;
+  return "until " + f.to;
 }
 function activeFilterSummary() {
   const f = state.flt, parts = [];

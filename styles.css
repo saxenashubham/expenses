@@ -169,4 +169,8 @@ footer.tools .spacer{ margin-left:auto; }
 .filter-toggle.open .filter-count{ background:#fff; color:#3a2f05; }
 .filter-summary{ font-size:13px; color:var(--ink); flex:1; min-width:80px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .filter-summary.muted{ color:var(--muted); }
-.bar-scope{ margin-left:auto; }
+.bar-sort{ margin-left:auto; }
+.bar-sort .sort-sel,.bar-sort select{ font-size:13px; }
+
+.filter-summary{ white-space:normal; }
+.filter-bar{ align-items:center; }
