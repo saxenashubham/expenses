@@ -2,7 +2,7 @@
    Fresh code loads on every online launch — no reinstall, no version-bump ritual.
    Static assets (icons, css) fall back to cache when offline. */
 
-const CACHE = "rl-shared-10";               // single rolling cache; no per-release bump needed
+const CACHE = "rl-shared-13";               // single rolling cache; no per-release bump needed
 const OFFLINE_SHELL = ["./index.html", "./styles.css", "./icon-192.png", "./icon-512.png", "./manifest.webmanifest"];
 
 self.addEventListener("install", (e) => {

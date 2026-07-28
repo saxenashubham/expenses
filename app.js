@@ -140,8 +140,22 @@ const state = {
   filtersOpen: false,  // collapsible filter panel, default collapsed
   edit: null,          // { id, date, amount, category } when editing a receipt
   page: 1,
-  fltSig: ""
+  fltSig: "",
+  dash: { currency: "USD", seg: "card", range: "12m" },
+  stmt: { card: "", currency: "USD", open: null }
 };
+const CATEGORY_COLORS = { Medical: "#B23A2E", Food: "#B5852A", Groceries: "#5B7A2E", Travel: "#2E5E9E", Vehicle: "#8A5A2B", Shopping: "#7A3E8A", Utilities: "#3A7A8A", Other: "#8A857C" };
+function segColor(k, mode) { return mode === "card" ? colorForCard(k) : (CATEGORY_COLORS[k] || "#8A857C"); }
+function monthsBack(n) {
+  const out = [], d = new Date();
+  for (let i = n - 1; i >= 0; i--) { const dt = new Date(d.getFullYear(), d.getMonth() - i, 1); out.push(dt.getFullYear() + "-" + String(dt.getMonth() + 1).padStart(2, "0")); }
+  return out;
+}
+const monthKeyOf = (s) => (s || "").slice(0, 7);
+function aggregate(rs, keyFn) {
+  const m = {}; rs.forEach((r) => { const k = keyFn(r); m[k] = (m[k] || 0) + (num(r.amount) || 0); });
+  return Object.entries(m).map(([k, v]) => ({ k, v })).filter((x) => x.v > 0).sort((a, b) => b.v - a.v);
+}
 const PAGE_SIZE = 20;
 const CARD_PALETTE = ["#0F6E6A", "#B23A2E", "#2E5E9E", "#8A5A2B", "#5B7A2E", "#7A3E8A", "#B5852A", "#3A7A8A", "#9E4B6E", "#4B6E3A"];
 function hashStr(s) { let h = 0; for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0; return h; }
@@ -222,6 +236,7 @@ function cardsMapToArray(map) {
     .map(([name, v]) => ({
       name,
       color: (v && v.color) || "",
+      stmtDay: (v && typeof v.stmtDay === "number") ? v.stmtDay : null,
       tokens: Object.entries((v && v.tokens) || {})
         .map(([last4, t]) => ({ last4: String(last4).replace(/\D/g, "").slice(-4), label: (t && t.label) || "" }))
         .filter((t) => t.last4)
@@ -255,6 +270,12 @@ async function removeCard(name) {
 async function setCardColor(name, color) {
   if (!name) return;
   try { await setDoc(cardsRef(), { cards: { [name]: { color } } }, { merge: true }); } catch (e) { console.error(e); }
+}
+async function setCardStmtDay(name, day) {
+  if (!name) return;
+  const raw = String(day).trim();
+  const val = raw === "" ? deleteField() : Math.max(1, Math.min(31, parseInt(raw, 10) || 1));
+  try { await setDoc(cardsRef(), { cards: { [name]: { stmtDay: val } } }, { merge: true }); } catch (e) { console.error(e); }
 }
 async function renameCard(oldName, newName) {
   oldName = (oldName || "").trim(); newName = (newName || "").trim();
@@ -414,6 +435,8 @@ function render() {
 
   if (state.view === "capture") return root.append(renderCapture());
   if (state.view === "cards") return root.append(renderManageCards());
+  if (state.view === "dash") return root.append(renderDash());
+  if (state.view === "stmt") return root.append(renderStatements());
 
   const cards = cardNames();
   // ---- collapsible filter panel (default collapsed); summary shows the date range too ----
@@ -496,7 +519,9 @@ function render() {
 
   root.append(el("footer", { class: "tools" }, [
     el("span", { class: "who" }, "Signed in as " + (USER.email || "")),
-    el("button", { class: "link spacer", onclick: () => { state.view = "cards"; render(); } }, "Manage cards"),
+    el("button", { class: "link spacer", onclick: () => { state.view = "dash"; render(); } }, "Dashboard"),
+    el("button", { class: "link", onclick: () => { state.view = "stmt"; render(); } }, "Statements"),
+    el("button", { class: "link", onclick: () => { state.view = "cards"; render(); } }, "Manage cards"),
     el("button", { class: "link", onclick: doSignOut }, "Sign out")
   ]));
 }
@@ -668,6 +693,10 @@ function renderManageCards() {
               el("button", { class: "link danger", onclick: async () => { if (confirm("Remove card \"" + c.name + "\" and all its tokens?")) { await removeCard(c.name); render(); } } }, "Remove")
             ])
           ]),
+          el("div", { class: "card-stmt" }, [
+            el("span", { class: "card-stmt-lbl" }, "Statement closes on day"),
+            el("input", { type: "number", min: "1", max: "31", class: "stmt-day-input mono", value: c.stmtDay || "", placeholder: "\u2014", onchange: async (e) => { await setCardStmtDay(c.name, e.target.value); render(); } })
+          ]),
           tokensOf(c).length
             ? el("ul", { class: "token-list" }, tokensOf(c).map((t) => el("li", { class: "token-row" }, [
                 el("span", { class: "mono" }, "\u2022\u2022" + t.last4),
@@ -734,6 +763,194 @@ function renderEditForm() {
       el("button", { class: "btn ghost", onclick: () => { state.edit = null; render(); } }, "Cancel"),
       el("button", { class: "btn primary", onclick: saveReceiptEdit }, "Save changes")
     ])
+  ]);
+}
+
+// ---------- dashboard ----------
+function renderDash() {
+  const cur = state.dash.currency, seg = state.dash.seg, range = state.dash.range;
+  const rs = RECEIPTS.filter((r) => (r.currency === "INR" ? "INR" : "USD") === cur);
+  const months = rangeMonths(range, rs);
+  const mset = new Set(months);
+  const inRange = rs.filter((r) => mset.has(monthKeyOf(r.date)));
+  const total = inRange.reduce((s, r) => s + (num(r.amount) || 0), 0);
+  const byCard = aggregate(inRange, (r) => r.card || "\u2014");
+  const byCat = aggregate(inRange, (r) => r.category || "Other");
+  const RANGES = [["1m", "1M"], ["3m", "3M"], ["6m", "6M"], ["12m", "12M"], ["ytd", "YTD"], ["all", "All"]];
+
+  return el("section", { class: "panel dash" }, [
+    el("div", { class: "manage-head" }, [
+      el("h2", { class: "manage-h" }, "Dashboard"),
+      el("button", { class: "btn ghost", onclick: () => { state.view = "list"; render(); } }, "Done")
+    ]),
+    el("div", { class: "seg", style: "margin:4px 0 12px" }, [
+      el("button", { class: "seg-btn" + (cur !== "INR" ? " on" : ""), onclick: () => { state.dash.currency = "USD"; render(); } }, "$ USD"),
+      el("button", { class: "seg-btn" + (cur === "INR" ? " on" : ""), onclick: () => { state.dash.currency = "INR"; render(); } }, "\u20b9 INR")
+    ]),
+    el("div", { class: "scope-btns dash-ranges" }, RANGES.map(([k, lbl]) => el("button", { class: "chip" + (range === k ? " on" : ""), onclick: () => { state.dash.range = k; render(); } }, lbl))),
+    el("div", { class: "dash-total" }, [el("span", { class: "dash-total-label" }, rangeLabel(range)), el("span", { class: "mono dash-total-val" }, money(total, cur))]),
+    el("h3", { class: "dash-h" }, "By card"),
+    breakdownList(byCard, total, cur, "card"),
+    el("h3", { class: "dash-h" }, "By category"),
+    breakdownList(byCat, total, cur, "category"),
+    el("div", { class: "dash-hist-head" }, [
+      el("h3", { class: "dash-h", style: "margin:0" }, "Monthly trend"),
+      el("div", { class: "scope-btns" }, [
+        el("button", { class: "chip" + (seg === "card" ? " on" : ""), onclick: () => { state.dash.seg = "card"; render(); } }, "By card"),
+        el("button", { class: "chip" + (seg === "category" ? " on" : ""), onclick: () => { state.dash.seg = "category"; render(); } }, "By category")
+      ])
+    ]),
+    stackedChart(rs, months, seg, cur)
+  ]);
+}
+function rangeLabel(k) { return { "1m": "This month", "3m": "Last 3 months", "6m": "Last 6 months", "12m": "Last 12 months", "ytd": "This year", "all": "All time" }[k] || "Last 12 months"; }
+function rangeMonths(preset, rs) {
+  const now = new Date();
+  if (preset === "1m") return monthsBack(1);
+  if (preset === "3m") return monthsBack(3);
+  if (preset === "6m") return monthsBack(6);
+  if (preset === "12m") return monthsBack(12);
+  if (preset === "ytd") { const out = []; for (let m = 0; m <= now.getMonth(); m++) out.push(now.getFullYear() + "-" + String(m + 1).padStart(2, "0")); return out; }
+  const keys = rs.map((r) => monthKeyOf(r.date)).filter(Boolean).sort();
+  if (!keys.length) return monthsBack(1);
+  let [fy, fm] = keys[0].split("-").map(Number); const ny = now.getFullYear(), nm = now.getMonth() + 1, out = [];
+  while (fy < ny || (fy === ny && fm <= nm)) { out.push(fy + "-" + String(fm).padStart(2, "0")); fm++; if (fm > 12) { fm = 1; fy++; } if (out.length > 120) break; }
+  return out;
+}
+function breakdownList(items, total, cur, mode) {
+  if (!items.length) return el("p", { class: "gate-note" }, "Nothing this month.");
+  return el("ul", { class: "dash-list" }, items.map((it) => {
+    const pct = total > 0 ? Math.round(it.v / total * 100) : 0;
+    const color = segColor(it.k, mode);
+    return el("li", { class: "dash-row" }, [
+      el("span", { class: "dash-dot", style: "background:" + color }),
+      el("span", { class: "dash-name" }, it.k),
+      el("span", { class: "dash-bar-wrap" }, el("span", { class: "dash-bar", style: "width:" + pct + "%;background:" + color })),
+      el("span", { class: "mono dash-amt" }, money(it.v, cur)),
+      el("span", { class: "dash-pct mono" }, pct + "%")
+    ]);
+  }));
+}
+function stackedChart(rs, months, seg, cur) {
+  const keyFn = seg === "card" ? ((r) => r.card || "\u2014") : ((r) => r.category || "Other");
+  const data = {}; const segTotals = {};
+  months.forEach((m) => data[m] = {});
+  rs.forEach((r) => { const mk = monthKeyOf(r.date); if (!(mk in data)) return; const k = keyFn(r); const v = num(r.amount) || 0; if (v <= 0) return; data[mk][k] = (data[mk][k] || 0) + v; segTotals[k] = (segTotals[k] || 0) + v; });
+  const segs = Object.keys(segTotals).sort((a, b) => segTotals[b] - segTotals[a]);
+  const monthTotals = months.map((m) => Object.values(data[m]).reduce((s, v) => s + v, 0));
+  const max = Math.max(1, ...monthTotals);
+  if (!segs.length) return el("p", { class: "gate-note" }, "No spend recorded in this currency yet.");
+
+  const W = 340, H = 172, padB = 20, padT = 6, padL = 4, padR = 4;
+  const plotH = H - padB - padT, bw = (W - padL - padR) / months.length;
+  const step = Math.ceil(months.length / 12);
+  const parts = [];
+  months.forEach((m, i) => {
+    let y = padT + plotH;
+    const x = padL + i * bw + bw * 0.15, w = bw * 0.7;
+    segs.forEach((k) => {
+      const v = data[m][k] || 0; if (v <= 0) return;
+      const h = (v / max) * plotH; y -= h;
+      parts.push('<rect x="' + x.toFixed(1) + '" y="' + y.toFixed(1) + '" width="' + w.toFixed(1) + '" height="' + h.toFixed(1) + '" fill="' + segColor(k, seg) + '"/>');
+    });
+    if (i % step === 0 || i === months.length - 1) {
+      const lbl = m.slice(5) + "/" + m.slice(2, 4);
+      parts.push('<text x="' + (padL + i * bw + bw / 2).toFixed(1) + '" y="' + (H - 6) + '" font-size="7.5" text-anchor="middle" fill="#8A857C">' + lbl + '</text>');
+    }
+  });
+  const svg = '<svg viewBox="0 0 ' + W + ' ' + H + '" width="100%" preserveAspectRatio="xMidYMid meet" role="img" aria-label="monthly spend chart">' + parts.join("") + '</svg>';
+  return el("div", {}, [
+    el("div", { class: "dash-max mono" }, "peak month: " + money(max, cur)),
+    el("div", { class: "dash-chart", html: svg }),
+    el("div", { class: "dash-legend" }, segs.map((k) => el("span", { class: "leg-item" }, [
+      el("span", { class: "dash-dot", style: "background:" + segColor(k, seg) }),
+      el("span", { class: "leg-name" }, k),
+      el("span", { class: "mono leg-val" }, money(segTotals[k], cur))
+    ])))
+  ]);
+}
+
+// ---------- statement reconciliation ----------
+const MONTHS_SHORT = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const isoOf = (d) => d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+const isoToday = () => isoOf(new Date());
+const clampDay = (day, y, m) => Math.min(day, new Date(y, m + 1, 0).getDate());
+function fmtShort(isoStr) { const p = isoStr.split("-").map(Number); return MONTHS_SHORT[p[1] - 1] + " " + p[2]; }
+function daysDiff(a, b) { return Math.abs((new Date(a) - new Date(b)) / 86400000); }
+function nearEdge(dateIso, p, n) { return daysDiff(dateIso, p.end) <= n || daysDiff(dateIso, p.start) <= n; }
+function statementPeriods(stmtDay, count) {
+  const today = new Date(), closes = [];
+  for (let i = -count - 1; i <= 1; i++) {
+    const d = new Date(today.getFullYear(), today.getMonth() + i, 1);
+    closes.push(new Date(d.getFullYear(), d.getMonth(), clampDay(stmtDay, d.getFullYear(), d.getMonth())));
+  }
+  closes.sort((a, b) => a - b);
+  const periods = [];
+  for (let i = 1; i < closes.length; i++) { const s = new Date(closes[i - 1]); s.setDate(s.getDate() + 1); periods.push({ start: isoOf(s), end: isoOf(closes[i]) }); }
+  const t = isoToday();
+  return periods.filter((p) => p.start <= t).slice(-count).reverse();
+}
+
+function renderStatements() {
+  const cur = state.stmt.currency;
+  const withDay = CARDS.filter((c) => c.stmtDay);
+  let cardName = state.stmt.card && CARDS.some((c) => c.name === state.stmt.card) ? state.stmt.card : (withDay[0] ? withDay[0].name : "");
+  state.stmt.card = cardName;
+  const card = CARDS.find((c) => c.name === cardName);
+  const body = [
+    el("div", { class: "seg", style: "margin:4px 0 12px" }, [
+      el("button", { class: "seg-btn" + (cur !== "INR" ? " on" : ""), onclick: () => { state.stmt.currency = "USD"; render(); } }, "$ USD"),
+      el("button", { class: "seg-btn" + (cur === "INR" ? " on" : ""), onclick: () => { state.stmt.currency = "INR"; render(); } }, "\u20b9 INR")
+    ]),
+    el("label", { class: "f card", style: "margin-bottom:12px" }, ["Card", selectFrom(["", ...cardNames()], cardName, (v) => { state.stmt.card = v; state.stmt.open = null; render(); }, "Select a card")])
+  ];
+
+  if (!card) body.push(el("p", { class: "gate-note" }, "Pick a card to reconcile."));
+  else if (!card.stmtDay) body.push(el("p", { class: "gate-note" }, "\u201c" + card.name + "\u201d has no statement day set \u2014 add one in Manage cards."));
+  else {
+    const rs = RECEIPTS.filter((r) => r.card === card.name && (r.currency === "INR" ? "INR" : "USD") === cur);
+    body.push(el("p", { class: "gate-note" }, "Closes on day " + card.stmtDay + " each month. \u26a0 marks charges within 3 days of a cycle edge \u2014 those may post to the neighboring statement."));
+    const ul = el("ul", { class: "stmt-list" });
+    statementPeriods(card.stmtDay, 12).forEach((p) => {
+      const prs = rs.filter((r) => r.date >= p.start && r.date <= p.end).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+      const total = prs.reduce((s, r) => s + (num(r.amount) || 0), 0);
+      const boundary = prs.filter((r) => nearEdge(r.date, p, 3));
+      const isOpen = state.stmt.open === p.end;
+      const current = p.end > isoToday();
+      const row = el("li", { class: "stmt-period" }, [
+        el("button", { class: "stmt-head", onclick: () => { state.stmt.open = isOpen ? null : p.end; render(); } }, [
+          el("span", { class: "stmt-range" }, fmtShort(p.start) + " \u2013 " + fmtShort(p.end) + (current ? "  (current)" : "")),
+          el("span", { class: "stmt-meta" }, [
+            boundary.length ? el("span", { class: "stmt-warn" }, "\u26a0 " + boundary.length) : null,
+            el("span", { class: "stmt-count" }, String(prs.length)),
+            el("span", { class: "mono stmt-total" }, money(total, cur))
+          ])
+        ])
+      ]);
+      if (isOpen) {
+        const det = el("ul", { class: "stmt-detail" });
+        if (!prs.length) det.append(el("li", { class: "gate-note" }, "No charges in this cycle."));
+        prs.forEach((r) => {
+          const edge = nearEdge(r.date, p, 3);
+          det.append(el("li", { class: "stmt-txn" + (edge ? " edge" : "") }, [
+            el("span", { class: "mono stmt-tdate" }, r.date),
+            el("span", { class: "stmt-tmerch" }, (edge ? "\u26a0 " : "") + (r.merchant || "\u2014")),
+            el("span", { class: "mono" }, money(r.amount, cur))
+          ]));
+        });
+        row.append(det);
+      }
+      ul.append(row);
+    });
+    body.push(ul);
+  }
+
+  return el("section", { class: "panel" }, [
+    el("div", { class: "manage-head" }, [
+      el("h2", { class: "manage-h" }, "Statement reconciliation"),
+      el("button", { class: "btn ghost", onclick: () => { state.view = "list"; render(); } }, "Done")
+    ]),
+    ...body
   ]);
 }
 
