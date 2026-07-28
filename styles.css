@@ -214,3 +214,9 @@ footer.tools .spacer{ margin-left:auto; }
 .stmt-tdate{ color:var(--muted); font-size:12px; }
 .stmt-tmerch{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .stmt-txn.edge .stmt-tmerch{ color:#8a6d1e; font-weight:600; }
+
+/* ---- monthly backup banner (v14) ---- */
+.backup-banner{ display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap; background:#E4F0EF; border:1px solid #BFDAD8; border-radius:10px; padding:12px 14px; margin-bottom:12px; }
+.bb-text{ font-size:14px; font-weight:600; color:var(--teal-deep); }
+.bb-actions{ display:flex; align-items:center; gap:12px; }
+.bb-actions .btn{ padding:8px 13px; }

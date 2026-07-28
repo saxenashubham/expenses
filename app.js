@@ -115,7 +115,7 @@ async function extract(dataUrl) {
 let USER = null;
 let RECEIPTS = [];
 let CARDS = [];
-let unsubReceipts = null, unsubCards = null;
+let unsubReceipts = null, unsubCards = null, unsubBackup = null;
 function monthRange() {
   const d = new Date(), y = d.getFullYear(), m = d.getMonth();
   const pad = (n) => String(n).padStart(2, "0");
@@ -142,7 +142,8 @@ const state = {
   page: 1,
   fltSig: "",
   dash: { currency: "USD", seg: "card", range: "12m" },
-  stmt: { card: "", currency: "USD", open: null }
+  stmt: { card: "", currency: "USD", open: null },
+  backupDone: {}, backupBusy: false
 };
 const CATEGORY_COLORS = { Medical: "#B23A2E", Food: "#B5852A", Groceries: "#5B7A2E", Travel: "#2E5E9E", Vehicle: "#8A5A2B", Shopping: "#7A3E8A", Utilities: "#3A7A8A", Other: "#8A857C" };
 function segColor(k, mode) { return mode === "card" ? colorForCard(k) : (CATEGORY_COLORS[k] || "#8A857C"); }
@@ -184,6 +185,7 @@ function doSignOut() { signOut(auth); }
 function teardown() {
   if (unsubReceipts) { unsubReceipts(); unsubReceipts = null; }
   if (unsubCards) { unsubCards(); unsubCards = null; }
+  if (unsubBackup) { unsubBackup(); unsubBackup = null; }
   RECEIPTS = []; CARDS = [];
 }
 function subscribe() {
@@ -196,6 +198,10 @@ function subscribe() {
     CARDS = (data.cards && !Array.isArray(data.cards))
       ? cardsMapToArray(data.cards)                    // current map shape
       : normalizeCards(data.cards || data.list || []); // legacy shape: read-only, never written back
+    if (state.screen === "ledger") render();
+  }, (err) => { console.error(err); });
+  unsubBackup = onSnapshot(doc(db, "meta", "backup"), (d) => {
+    state.backupDone = (d.exists() && d.data().done) || {};
     if (state.screen === "ledger") render();
   }, (err) => { console.error(err); });
 }
@@ -439,6 +445,18 @@ function render() {
   if (state.view === "stmt") return root.append(renderStatements());
 
   const cards = cardNames();
+  // ---- monthly backup reminder (previous full month; dismissal syncs across devices) ----
+  const bmk = backupMonthKey();
+  if (!state.backupDone[bmk]) {
+    root.append(el("div", { class: "backup-banner" }, [
+      el("span", { class: "bb-text" }, "Back up " + monthName(bmk) + " \u2014 spreadsheet + receipt images."),
+      el("span", { class: "bb-actions" }, [
+        el("button", { class: "btn primary", ...(state.backupBusy ? { disabled: "disabled" } : {}), onclick: doBackup }, state.backupBusy ? "Preparing\u2026" : "Download backup"),
+        el("button", { class: "link", onclick: () => markBackupDone(bmk, "dismissed") }, "Dismiss")
+      ])
+    ]));
+  }
+
   // ---- collapsible filter panel (default collapsed); summary shows the date range too ----
   const summ = activeFilterSummary();
   const summaryText = [dateSummary(), ...summ].join(" \u00b7 ");
@@ -522,6 +540,7 @@ function render() {
     el("button", { class: "link spacer", onclick: () => { state.view = "dash"; render(); } }, "Dashboard"),
     el("button", { class: "link", onclick: () => { state.view = "stmt"; render(); } }, "Statements"),
     el("button", { class: "link", onclick: () => { state.view = "cards"; render(); } }, "Manage cards"),
+    el("button", { class: "link", ...(state.backupBusy ? { disabled: "disabled" } : {}), onclick: doBackup }, state.backupBusy ? "Backing up\u2026" : "Backup"),
     el("button", { class: "link", onclick: doSignOut }, "Sign out")
   ]));
 }
@@ -952,6 +971,77 @@ function renderStatements() {
     ]),
     ...body
   ]);
+}
+
+// ---------- monthly backup ----------
+function loadScript(src, globalName) {
+  return new Promise((res, rej) => {
+    if (window[globalName]) return res(window[globalName]);
+    const s = document.createElement("script"); s.src = src;
+    s.onload = () => window[globalName] ? res(window[globalName]) : rej(new Error("load " + globalName));
+    s.onerror = () => rej(new Error("network " + src));
+    document.head.appendChild(s);
+  });
+}
+function backupMonthKey() { return lastMonthRange().from.slice(0, 7); }
+function monthName(mk) { const p = mk.split("-"); return MONTHS_SHORT[+p[1] - 1] + " " + p[0]; }
+async function markBackupDone(month, action) {
+  try { await setDoc(doc(db, "meta", "backup"), { done: { [month]: { action, by: (USER && USER.email) || "", at: Date.now() } } }, { merge: true }); } catch (e) { console.error(e); }
+}
+async function doBackup() {
+  if (state.backupBusy) return;
+  const range = lastMonthRange(), mk = range.from.slice(0, 7);
+  state.backupBusy = true; render();
+  try {
+    const [XLSX, JSZip] = await Promise.all([
+      loadScript("https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js", "XLSX"),
+      loadScript("https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js", "JSZip")
+    ]);
+    const rs = RECEIPTS.filter((r) => (r.date || "") >= range.from && (r.date || "") <= range.to)
+      .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+
+    const wb = XLSX.utils.book_new();
+    const tx = [["Date", "Merchant", "Amount", "Currency", "Category", "Card", "Token", "Last4", "HCSA", "Added by", "Note"]];
+    rs.forEach((r) => tx.push([r.date || "", r.merchant || "", num(r.amount) || 0, r.currency || "USD", r.category || "Other", r.card || "", r.tokenLabel || "", r.last4 || "", r.hcsa ? "Yes" : "", r.ownerName || r.ownerEmail || "", r.note || ""]));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(tx), "Transactions");
+
+    const sum = [["Summary \u2014 " + monthName(mk)], [], ["By card"]];
+    ["USD", "INR"].forEach((cur) => {
+      const cr = rs.filter((r) => (r.currency === "INR" ? "INR" : "USD") === cur); if (!cr.length) return;
+      sum.push([cur]);
+      aggregate(cr, (r) => r.card || "\u2014").forEach((x) => sum.push(["", x.k, x.v]));
+      sum.push(["", "Total", cr.reduce((s, r) => s + (num(r.amount) || 0), 0)]);
+    });
+    sum.push([], ["By category"]);
+    ["USD", "INR"].forEach((cur) => {
+      const cr = rs.filter((r) => (r.currency === "INR" ? "INR" : "USD") === cur); if (!cr.length) return;
+      sum.push([cur]);
+      aggregate(cr, (r) => r.category || "Other").forEach((x) => sum.push(["", x.k, x.v]));
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sum), "Summary");
+
+    const zip = new JSZip();
+    zip.file("receipts-" + mk + ".xlsx", XLSX.write(wb, { type: "array", bookType: "xlsx" }));
+    const imgs = zip.folder("images");
+    let ok = 0, fail = 0;
+    for (const r of rs) {
+      if (!r.imageUrl) continue;
+      try {
+        const resp = await fetch(r.imageUrl); if (!resp.ok) throw new Error("http");
+        const blob = await resp.blob();
+        const safe = (r.merchant || "receipt").replace(/[^a-z0-9]+/gi, "_").slice(0, 24);
+        imgs.file((r.date || "") + "_" + safe + "_" + r.id + ".jpg", blob); ok++;
+      } catch (e) { fail++; }
+    }
+    if (fail && !ok) zip.file("IMAGES_README.txt", "Images couldn't be bundled. Your Firebase Storage bucket needs a one-time CORS rule allowing this app's origin to download image bytes. The spreadsheet is complete; images stay available in the app and the Firebase console.");
+
+    const blob = await zip.generateAsync({ type: "blob" });
+    const url = URL.createObjectURL(blob);
+    const a = el("a", { href: url, download: "receipt-backup-" + mk + ".zip" }); a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 3000);
+    await markBackupDone(mk, "downloaded");
+  } catch (e) { alert("Backup failed: " + (e.message || e)); }
+  state.backupBusy = false; render();
 }
 
 // ---------- boot ----------
