@@ -138,12 +138,14 @@ const state = {
   sort: { by: "date", dir: "desc" },   // by: date | amount
   openId: null,
   filtersOpen: false,  // collapsible filter panel, default collapsed
+  menuOpen: false,     // hamburger dropdown
   edit: null,          // { id, date, amount, category } when editing a receipt
   page: 1,
   fltSig: "",
   dash: { currency: "USD", seg: "card", range: "12m" },
   stmt: { card: "", currency: "USD", open: null },
-  backupDone: {}, backupBusy: false
+  backupDone: {}, backupBusy: false,
+  export: { name: "", from: lastMonthRange().from, to: lastMonthRange().to, card: "", category: "", currency: "", hcsaOnly: false }
 };
 const CATEGORY_COLORS = { Medical: "#B23A2E", Food: "#B5852A", Groceries: "#5B7A2E", Travel: "#2E5E9E", Vehicle: "#8A5A2B", Shopping: "#7A3E8A", Utilities: "#3A7A8A", Other: "#8A857C" };
 function segColor(k, mode) { return mode === "card" ? colorForCard(k) : (CATEGORY_COLORS[k] || "#8A857C"); }
@@ -431,18 +433,37 @@ function render() {
   if (state.screen === "signin") return root.append(renderSignIn());
   if (state.screen === "denied") return root.append(renderDenied());
 
+  const go = (v) => { state.menuOpen = false; state.view = v; render(); };
   root.append(el("header", { class: "app" }, [
     el("div", {}, [
       el("div", { class: "eyebrow" }, "Receipt Ledger \u00b7 " + firstName(USER.displayName || USER.email)),
       el("h1", {}, "Every slip, filed by the date you'll search for it.")
     ]),
-    el("button", { class: "btn primary", onclick: startCapture }, "Capture receipt")
+    el("div", { class: "head-actions" }, [
+      el("button", { class: "btn primary", onclick: startCapture }, "Capture receipt"),
+      el("div", { class: "menu-wrap" }, [
+        el("button", { class: "menu-btn", "aria-label": "Menu", onclick: () => { state.menuOpen = !state.menuOpen; render(); } }, "\u2630"),
+        ...(state.menuOpen ? [
+          el("div", { class: "menu-overlay", onclick: () => { state.menuOpen = false; render(); } }),
+          el("div", { class: "menu-pop" }, [
+            el("div", { class: "menu-who" }, USER.email || ""),
+            el("button", { class: "menu-item", onclick: () => go("dash") }, "Dashboard"),
+            el("button", { class: "menu-item", onclick: () => go("stmt") }, "Statements"),
+            el("button", { class: "menu-item", onclick: () => go("cards") }, "Manage cards"),
+            el("button", { class: "menu-item", onclick: () => go("export") }, "Backup / export"),
+            el("div", { class: "menu-sep" }),
+            el("button", { class: "menu-item danger", onclick: () => { state.menuOpen = false; doSignOut(); } }, "Sign out")
+          ])
+        ] : [])
+      ])
+    ])
   ]));
 
   if (state.view === "capture") return root.append(renderCapture());
   if (state.view === "cards") return root.append(renderManageCards());
   if (state.view === "dash") return root.append(renderDash());
   if (state.view === "stmt") return root.append(renderStatements());
+  if (state.view === "export") return root.append(renderExport());
 
   const cards = cardNames();
   // ---- monthly backup reminder (previous full month; dismissal syncs across devices) ----
@@ -451,7 +472,7 @@ function render() {
     root.append(el("div", { class: "backup-banner" }, [
       el("span", { class: "bb-text" }, "Back up " + monthName(bmk) + " \u2014 spreadsheet + receipt images."),
       el("span", { class: "bb-actions" }, [
-        el("button", { class: "btn primary", ...(state.backupBusy ? { disabled: "disabled" } : {}), onclick: doBackup }, state.backupBusy ? "Preparing\u2026" : "Download backup"),
+        el("button", { class: "btn primary", ...(state.backupBusy ? { disabled: "disabled" } : {}), onclick: doBackup }, state.backupBusy ? "Preparing\u2026" : "Download Backup"),
         el("button", { class: "link", onclick: () => markBackupDone(bmk, "dismissed") }, "Dismiss")
       ])
     ]));
@@ -535,14 +556,6 @@ function render() {
     }
   }
 
-  root.append(el("footer", { class: "tools" }, [
-    el("span", { class: "who" }, "Signed in as " + (USER.email || "")),
-    el("button", { class: "link spacer", onclick: () => { state.view = "dash"; render(); } }, "Dashboard"),
-    el("button", { class: "link", onclick: () => { state.view = "stmt"; render(); } }, "Statements"),
-    el("button", { class: "link", onclick: () => { state.view = "cards"; render(); } }, "Manage cards"),
-    el("button", { class: "link", ...(state.backupBusy ? { disabled: "disabled" } : {}), onclick: doBackup }, state.backupBusy ? "Backing up\u2026" : "Backup"),
-    el("button", { class: "link", onclick: doSignOut }, "Sign out")
-  ]));
 }
 
 function renderSignIn() {
@@ -988,24 +1001,23 @@ function monthName(mk) { const p = mk.split("-"); return MONTHS_SHORT[+p[1] - 1]
 async function markBackupDone(month, action) {
   try { await setDoc(doc(db, "meta", "backup"), { done: { [month]: { action, by: (USER && USER.email) || "", at: Date.now() } } }, { merge: true }); } catch (e) { console.error(e); }
 }
-async function doBackup() {
+async function buildBackup(opts) {
+  // opts: { filterFn, name, dateLabel, monthKeyToMark? }
   if (state.backupBusy) return;
-  const range = lastMonthRange(), mk = range.from.slice(0, 7);
   state.backupBusy = true; render();
   try {
     const [XLSX, JSZip] = await Promise.all([
       loadScript("https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js", "XLSX"),
       loadScript("https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js", "JSZip")
     ]);
-    const rs = RECEIPTS.filter((r) => (r.date || "") >= range.from && (r.date || "") <= range.to)
-      .sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+    const rs = RECEIPTS.filter(opts.filterFn).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
 
     const wb = XLSX.utils.book_new();
     const tx = [["Date", "Merchant", "Amount", "Currency", "Category", "Card", "Token", "Last4", "HCSA", "Added by", "Note"]];
     rs.forEach((r) => tx.push([r.date || "", r.merchant || "", num(r.amount) || 0, r.currency || "USD", r.category || "Other", r.card || "", r.tokenLabel || "", r.last4 || "", r.hcsa ? "Yes" : "", r.ownerName || r.ownerEmail || "", r.note || ""]));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(tx), "Transactions");
 
-    const sum = [["Summary \u2014 " + monthName(mk)], [], ["By card"]];
+    const sum = [["Summary \u2014 " + (opts.dateLabel || "export")], [], ["By card"]];
     ["USD", "INR"].forEach((cur) => {
       const cr = rs.filter((r) => (r.currency === "INR" ? "INR" : "USD") === cur); if (!cr.length) return;
       sum.push([cur]);
@@ -1021,7 +1033,7 @@ async function doBackup() {
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(sum), "Summary");
 
     const zip = new JSZip();
-    zip.file("receipts-" + mk + ".xlsx", XLSX.write(wb, { type: "array", bookType: "xlsx" }));
+    zip.file("receipts-" + (opts.dateLabel || "export") + ".xlsx", XLSX.write(wb, { type: "array", bookType: "xlsx" }));
     const imgs = zip.folder("images");
     let ok = 0, fail = 0;
     for (const r of rs) {
@@ -1037,11 +1049,62 @@ async function doBackup() {
 
     const blob = await zip.generateAsync({ type: "blob" });
     const url = URL.createObjectURL(blob);
-    const a = el("a", { href: url, download: "receipt-backup-" + mk + ".zip" }); a.click();
+    const fname = opts.name + (opts.dateLabel ? "-" + opts.dateLabel : "") + ".zip";
+    const a = el("a", { href: url, download: fname }); a.click();
     setTimeout(() => URL.revokeObjectURL(url), 3000);
-    await markBackupDone(mk, "downloaded");
+    if (opts.monthKeyToMark) await markBackupDone(opts.monthKeyToMark, "downloaded");
   } catch (e) { alert("Backup failed: " + (e.message || e)); }
   state.backupBusy = false; render();
+}
+async function doBackup() {
+  const range = lastMonthRange(), mk = range.from.slice(0, 7);
+  await buildBackup({ filterFn: (r) => { const d = r.date || ""; return d >= range.from && d <= range.to; }, name: "receipt-backup", dateLabel: mk, monthKeyToMark: mk });
+}
+function matchesExport(r, e) {
+  const d = r.date || "";
+  if (e.from && d < e.from) return false;
+  if (e.to && d > e.to) return false;
+  if (e.currency && (r.currency === "INR" ? "INR" : "USD") !== e.currency) return false;
+  if (e.card && r.card !== e.card) return false;
+  if (e.category && (r.category || "Other") !== e.category) return false;
+  if (e.hcsaOnly && !r.hcsa) return false;
+  return true;
+}
+async function doExport() {
+  const e = state.export;
+  const name = ((e.name || "export").trim().replace(/[^a-z0-9._-]+/gi, "_")) || "export";
+  const label = (e.from && e.to) ? (e.from + "_" + e.to) : (e.from ? ("from_" + e.from) : (e.to ? ("until_" + e.to) : "all"));
+  await buildBackup({ filterFn: (r) => matchesExport(r, e), name, dateLabel: label });
+}
+function renderExport() {
+  const e = state.export;
+  const match = RECEIPTS.filter((r) => matchesExport(r, e));
+  return el("section", { class: "panel" }, [
+    el("div", { class: "manage-head" }, [
+      el("h2", { class: "manage-h" }, "Export / backup"),
+      el("button", { class: "btn ghost", onclick: () => { state.view = "list"; render(); } }, "Done")
+    ]),
+    el("div", { class: "fields", style: "margin-top:8px" }, [
+      field("Name (prefixes the file)", el("input", { value: e.name, placeholder: "e.g. hcsa", oninput: (ev) => { e.name = ev.target.value; } })),
+      el("div", { class: "scope-btns", style: "margin:2px 0" }, [
+        el("button", { class: "chip", onclick: () => { const r = monthRange(); e.from = r.from; e.to = r.to; render(); } }, "This month"),
+        el("button", { class: "chip", onclick: () => { const r = lastMonthRange(); e.from = r.from; e.to = r.to; render(); } }, "Last month"),
+        el("button", { class: "chip", onclick: () => { e.from = ""; e.to = ""; render(); } }, "All dates")
+      ]),
+      field("From", el("input", { class: "mono", type: "date", value: e.from, oninput: (ev) => { e.from = ev.target.value; render(); } })),
+      field("To", el("input", { class: "mono", type: "date", value: e.to, oninput: (ev) => { e.to = ev.target.value; render(); } })),
+      field("Currency", selectFrom(["", "USD", "INR"], e.currency, (v) => { e.currency = v; render(); }, "Any")),
+      field("Card", selectFrom(["", ...cardNames()], e.card, (v) => { e.card = v; render(); }, "Any")),
+      field("Category", selectFrom(["", ...CATEGORIES], e.category, (v) => { e.category = v; render(); }, "Any")),
+      el("button", { class: "hcsa-toggle" + (e.hcsaOnly ? " on" : ""), onclick: () => { e.hcsaOnly = !e.hcsaOnly; render(); } }, [
+        el("span", { class: "box" }, e.hcsaOnly ? "\u2713" : ""), "HCSA / reimbursable only"
+      ]),
+      el("p", { class: "gate-note" }, match.length + " receipt" + (match.length === 1 ? "" : "s") + " match"),
+      el("div", { class: "cap-actions" }, [
+        el("button", { class: "btn primary", ...((state.backupBusy || !match.length) ? { disabled: "disabled" } : {}), onclick: doExport }, state.backupBusy ? "Preparing\u2026" : "Download export")
+      ])
+    ])
+  ]);
 }
 
 // ---------- boot ----------
