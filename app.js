@@ -134,7 +134,7 @@ const state = {
   screen: "loading",   // loading | signin | denied | ledger
   view: "list",        // list | capture | cards
   cap: null,
-  flt: { from: monthRange().from, to: monthRange().to, card: "", token: "", category: "", currency: "", owner: "", hcsaOnly: false, text: "" },
+  flt: { from: monthRange().from, to: monthRange().to, card: "", token: "", category: "", currency: "", owner: "", hcsaOnly: false, text: "", tag: "" },
   sort: { by: "date", dir: "desc" },   // by: date | amount
   openId: null,
   filtersOpen: false,  // collapsible filter panel, default collapsed
@@ -145,7 +145,7 @@ const state = {
   dash: { currency: "USD", seg: "card", range: "12m" },
   stmt: { card: "", currency: "USD", open: null },
   backupDone: {}, backupBusy: false,
-  export: { name: "", from: lastMonthRange().from, to: lastMonthRange().to, card: "", category: "", currency: "", hcsaOnly: false }
+  export: { name: "", from: lastMonthRange().from, to: lastMonthRange().to, card: "", category: "", currency: "", hcsaOnly: false, tag: "" }
 };
 const CATEGORY_COLORS = { Medical: "#B23A2E", Food: "#B5852A", Groceries: "#5B7A2E", Travel: "#2E5E9E", Vehicle: "#8A5A2B", Shopping: "#7A3E8A", Utilities: "#3A7A8A", Other: "#8A857C" };
 function segColor(k, mode) { return mode === "card" ? colorForCard(k) : (CATEGORY_COLORS[k] || "#8A857C"); }
@@ -158,6 +158,17 @@ const monthKeyOf = (s) => (s || "").slice(0, 7);
 function aggregate(rs, keyFn) {
   const m = {}; rs.forEach((r) => { const k = keyFn(r); m[k] = (m[k] || 0) + (num(r.amount) || 0); });
   return Object.entries(m).map(([k, v]) => ({ k, v })).filter((x) => x.v > 0).sort((a, b) => b.v - a.v);
+}
+function parseTags(str) { return [...new Set(String(str || "").split(/[\s,#]+/).map((t) => t.trim().toLowerCase()).filter(Boolean))]; }
+function tagsToStr(arr) { return (arr || []).join(", "); }
+function allTags() { const s = new Set(); RECEIPTS.forEach((r) => (r.tags || []).forEach((t) => s.add(t))); return [...s].sort(); }
+function tagsField(get, set) {
+  const cur = parseTags(get());
+  const suggestions = allTags().filter((t) => !cur.includes(t)).slice(0, 12);
+  return el("div", { class: "tags-field" }, [
+    el("input", { value: get(), placeholder: "e.g. birthday, vacation", oninput: (e) => set(e.target.value) }),
+    suggestions.length ? el("div", { class: "tag-suggests" }, suggestions.map((t) => el("button", { class: "tag-sugg", onclick: () => { const v = parseTags(get()); if (!v.includes(t)) set(tagsToStr([...v, t])); render(); } }, "#" + t))) : null
+  ]);
 }
 const PAGE_SIZE = 20;
 const CARD_PALETTE = ["#0F6E6A", "#B23A2E", "#2E5E9E", "#8A5A2B", "#5B7A2E", "#7A3E8A", "#B5852A", "#3A7A8A", "#9E4B6E", "#4B6E3A"];
@@ -307,7 +318,9 @@ async function saveReceiptEdit() {
     await updateDoc(doc(db, "receipts", e2.id), {
       date: e2.date || todayISO(),
       amount: e2.amount,
-      category: CATEGORIES.includes(e2.category) ? e2.category : "Other"
+      category: CATEGORIES.includes(e2.category) ? e2.category : "Other",
+      note: (e2.note || "").trim(),
+      tags: parseTags(e2.tags)
     });
     state.edit = null; render();
   } catch (err) { alert("Couldn't save the edit: " + (err.message || err)); }
@@ -321,7 +334,7 @@ async function deleteAllReceipts() {
 // ---------- capture ----------
 function startCapture() {
   state.view = "capture";
-  state.cap = { img: null, date: todayISO(), merchant: "", amount: "", currency: "USD", card: "", last4: "", tokenLabel: "", linkLast4: "", linkLabel: "", category: "Other", hcsa: false, note: "", reading: false, err: false, addingCard: false, loadingPdf: false, saving: false };
+  state.cap = { img: null, date: todayISO(), merchant: "", amount: "", currency: "USD", card: "", last4: "", tokenLabel: "", linkLast4: "", linkLabel: "", category: "Other", hcsa: false, note: "", tags: "", reading: false, err: false, addingCard: false, loadingPdf: false, saving: false };
   render();
 }
 function onFileInput(ev) { const f = ev.target.files && ev.target.files[0]; ev.target.value = ""; if (f) processFile(f); }
@@ -364,7 +377,7 @@ async function saveCapture() {
       date: c.date || todayISO(), merchant: c.merchant.trim(), amount: c.amount, currency: c.currency === "INR" ? "INR" : "USD",
       card: c.card.trim(), last4: (c.last4 || "").replace(/\D/g, "").slice(-4), tokenLabel: (c.tokenLabel || "").trim(),
       category: CATEGORIES.includes(c.category) ? c.category : "Other",
-      hcsa: !!c.hcsa, note: c.note.trim(),
+      hcsa: !!c.hcsa, note: c.note.trim(), tags: parseTags(c.tags),
       imagePath: path, imageUrl,
       ownerEmail: (USER.email || "").toLowerCase(), ownerName: USER.displayName || USER.email,
       createdAt: serverTimestamp(), addedAt: Date.now()
@@ -414,14 +427,15 @@ function filtered() {
     if (f.owner === "partner" && (r.ownerEmail || "") !== otherEmail()) return false;
     if (f.hcsaOnly && !r.hcsa) return false;
     if (f.text) { const t = f.text.toLowerCase(); if (!((r.merchant || "").toLowerCase().includes(t) || (r.note || "").toLowerCase().includes(t))) return false; }
+    if (f.tag && !(r.tags || []).includes(f.tag)) return false;
     return true;
   });
   return sortReceipts(arr);
 }
 function exportCsv() {
   const esc = (s) => '"' + String(s == null ? "" : s).replace(/"/g, '""') + '"';
-  const rows = [["date", "merchant", "amount", "currency", "category", "card", "token", "last4", "hcsa", "added_by", "note", "image_url"]];
-  filtered().forEach((r) => rows.push([r.date, r.merchant, r.amount, r.currency || "USD", r.category || "Other", r.card, r.tokenLabel || "", r.last4 || "", r.hcsa ? "yes" : "", r.ownerName || r.ownerEmail || "", r.note, r.imageUrl || ""]));
+  const rows = [["date", "merchant", "amount", "currency", "category", "card", "token", "last4", "hcsa", "tags", "added_by", "note", "image_url"]];
+  filtered().forEach((r) => rows.push([r.date, r.merchant, r.amount, r.currency || "USD", r.category || "Other", r.card, r.tokenLabel || "", r.last4 || "", r.hcsa ? "yes" : "", (r.tags || []).join(" "), r.ownerName || r.ownerEmail || "", r.note, r.imageUrl || ""]));
   const url = URL.createObjectURL(new Blob([rows.map((x) => x.map(esc).join(",")).join("\n")], { type: "text/csv" }));
   const a = el("a", { href: url, download: "receipt-ledger.csv" }); a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
@@ -503,14 +517,15 @@ function render() {
       el("div", { class: "f-row" }, [
         labelInput("Card", selectFrom(["", ...cards], state.flt.card, (v) => { state.flt.card = v; render(); }, "Any"), "card"),
         labelInput("Category", selectFrom(["", ...CATEGORIES], state.flt.category, (v) => { state.flt.category = v; render(); }, "Any"), "card"),
-        allTokenLabels().length ? labelInput("Token / phone", selectFrom(["", ...allTokenLabels()], state.flt.token, (v) => { state.flt.token = v; render(); }, "Any"), "card") : null
+        allTokenLabels().length ? labelInput("Token / phone", selectFrom(["", ...allTokenLabels()], state.flt.token, (v) => { state.flt.token = v; render(); }, "Any"), "card") : null,
+        allTags().length ? labelInput("Tag", selectFrom(["", ...allTags()], state.flt.tag, (v) => { state.flt.tag = v; render(); }, "Any"), "card") : null
       ]),
       el("div", { class: "f-row" }, [
         labelInput("Search", el("input", { value: state.flt.text, placeholder: "merchant or note", oninput: (e) => { state.flt.text = e.target.value; render(); } }), "grow"),
         ownerChips(),
         curChips(),
         el("button", { class: "chip" + (state.flt.hcsaOnly ? " on" : ""), onclick: () => { state.flt.hcsaOnly = !state.flt.hcsaOnly; render(); } }, "HCSA only"),
-        summ.length ? el("button", { class: "link", onclick: () => { state.flt = { ...state.flt, card: "", token: "", category: "", currency: "", owner: "", hcsaOnly: false, text: "" }; render(); } }, "Clear filters") : null
+        summ.length ? el("button", { class: "link", onclick: () => { state.flt = { ...state.flt, card: "", token: "", category: "", currency: "", owner: "", hcsaOnly: false, text: "", tag: "" }; render(); } }, "Clear filters") : null
       ])
     ]));
   }
@@ -610,6 +625,7 @@ function activeFilterSummary() {
   if (f.owner === "mine") parts.push("Mine");
   if (f.owner === "partner") parts.push(firstName(otherEmail()));
   if (f.hcsaOnly) parts.push("HCSA");
+  if (f.tag) parts.push("#" + f.tag);
   if (f.text) parts.push('"' + f.text + '"');
   return parts;
 }
@@ -696,6 +712,7 @@ function renderCapture() {
           el("span", { class: "box" }, c.hcsa ? "\u2713" : ""), "Flag as HCSA / reimbursable"
         ]),
         field("Note (optional)", el("input", { value: c.note, placeholder: "what it was for", oninput: (e) => c.note = e.target.value })),
+        field("Tags (optional)", tagsField(() => c.tags, (v) => c.tags = v)),
         el("div", { class: "cap-actions" }, [
           el("button", { class: "btn ghost", onclick: () => { state.view = "list"; state.cap = null; render(); } }, "Cancel"),
           el("button", { class: "btn primary", ...((!c.img || c.reading || c.saving) ? { disabled: "disabled" } : {}), onclick: saveCapture }, c.saving ? "Saving\u2026" : "Save to ledger")
@@ -774,8 +791,9 @@ function renderReceipt(r) {
       r.imageUrl ? el("img", { src: r.imageUrl, alt: "receipt" }) : el("div", { class: "reading" }, "No image."),
       (r.card || r.tokenLabel || r.last4) ? el("p", { class: "r-pay mono" }, "Paid: " + (r.card || "\u2014") + (r.tokenLabel ? " \u00b7 " + r.tokenLabel : "") + (r.last4 ? " \u00b7 \u2022\u2022" + r.last4 : "")) : null,
       r.note ? el("p", { class: "r-note" }, r.note) : null,
+      (r.tags && r.tags.length) ? el("div", { class: "r-tags" }, r.tags.map((t) => el("span", { class: "r-tag" }, "#" + t))) : null,
       editing ? renderEditForm() : el("div", { class: "r-detail-actions" }, [
-        el("button", { class: "link", onclick: () => { state.edit = { id: r.id, date: r.date || todayISO(), amount: r.amount || "", category: r.category || "Other" }; render(); } }, "Edit"),
+        el("button", { class: "link", onclick: () => { state.edit = { id: r.id, date: r.date || todayISO(), amount: r.amount || "", category: r.category || "Other", note: r.note || "", tags: tagsToStr(r.tags) }; render(); } }, "Edit"),
         r.imageUrl ? el("a", { class: "link", href: r.imageUrl, target: "_blank", rel: "noopener", download: "" }, "Download image") : null,
         el("button", { class: "link danger", onclick: () => removeReceipt(r) }, "Delete")
       ])
@@ -789,7 +807,9 @@ function renderEditForm() {
     el("div", { class: "edit-fields" }, [
       el("label", {}, ["Date", el("input", { class: "mono", type: "date", value: e2.date, oninput: (ev) => e2.date = ev.target.value })]),
       el("label", {}, ["Amount", el("input", { class: "mono", value: e2.amount, inputmode: "decimal", oninput: (ev) => e2.amount = ev.target.value })]),
-      el("label", {}, ["Category", selectFrom(CATEGORIES, e2.category, (v) => { e2.category = v; })])
+      el("label", {}, ["Category", selectFrom(CATEGORIES, e2.category, (v) => { e2.category = v; })]),
+      el("label", {}, ["Note", el("input", { value: e2.note, placeholder: "what it was for", oninput: (ev) => e2.note = ev.target.value })]),
+      el("label", {}, ["Tags", tagsField(() => e2.tags, (v) => e2.tags = v)])
     ]),
     el("div", { class: "cap-actions" }, [
       el("button", { class: "btn ghost", onclick: () => { state.edit = null; render(); } }, "Cancel"),
@@ -1013,8 +1033,8 @@ async function buildBackup(opts) {
     const rs = RECEIPTS.filter(opts.filterFn).sort((a, b) => (a.date || "").localeCompare(b.date || ""));
 
     const wb = XLSX.utils.book_new();
-    const tx = [["Date", "Merchant", "Amount", "Currency", "Category", "Card", "Token", "Last4", "HCSA", "Added by", "Note"]];
-    rs.forEach((r) => tx.push([r.date || "", r.merchant || "", num(r.amount) || 0, r.currency || "USD", r.category || "Other", r.card || "", r.tokenLabel || "", r.last4 || "", r.hcsa ? "Yes" : "", r.ownerName || r.ownerEmail || "", r.note || ""]));
+    const tx = [["Date", "Merchant", "Amount", "Currency", "Category", "Card", "Token", "Last4", "HCSA", "Tags", "Added by", "Note"]];
+    rs.forEach((r) => tx.push([r.date || "", r.merchant || "", num(r.amount) || 0, r.currency || "USD", r.category || "Other", r.card || "", r.tokenLabel || "", r.last4 || "", r.hcsa ? "Yes" : "", (r.tags || []).join(" "), r.ownerName || r.ownerEmail || "", r.note || ""]));
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(tx), "Transactions");
 
     const sum = [["Summary \u2014 " + (opts.dateLabel || "export")], [], ["By card"]];
@@ -1068,6 +1088,7 @@ function matchesExport(r, e) {
   if (e.card && r.card !== e.card) return false;
   if (e.category && (r.category || "Other") !== e.category) return false;
   if (e.hcsaOnly && !r.hcsa) return false;
+  if (e.tag && !(r.tags || []).includes(e.tag)) return false;
   return true;
 }
 async function doExport() {
@@ -1096,6 +1117,7 @@ function renderExport() {
       field("Currency", selectFrom(["", "USD", "INR"], e.currency, (v) => { e.currency = v; render(); }, "Any")),
       field("Card", selectFrom(["", ...cardNames()], e.card, (v) => { e.card = v; render(); }, "Any")),
       field("Category", selectFrom(["", ...CATEGORIES], e.category, (v) => { e.category = v; render(); }, "Any")),
+      allTags().length ? field("Tag", selectFrom(["", ...allTags()], e.tag, (v) => { e.tag = v; render(); }, "Any")) : null,
       el("button", { class: "hcsa-toggle" + (e.hcsaOnly ? " on" : ""), onclick: () => { e.hcsaOnly = !e.hcsaOnly; render(); } }, [
         el("span", { class: "box" }, e.hcsaOnly ? "\u2713" : ""), "HCSA / reimbursable only"
       ]),

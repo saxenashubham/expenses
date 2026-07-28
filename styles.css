@@ -236,3 +236,11 @@ footer.tools .spacer{ margin-left:auto; }
   .head-actions{ width:100%; }
   .head-actions .btn.primary{ width:auto; flex:1; }
 }
+
+/* ---- tags (v18) ---- */
+.tags-field{ display:flex; flex-direction:column; gap:6px; }
+.tag-suggests{ display:flex; flex-wrap:wrap; gap:6px; }
+.tag-sugg{ background:#F3F0E9; border:1px solid var(--rule); border-radius:14px; padding:4px 10px; font-size:12px; font-weight:600; color:var(--teal-deep); cursor:pointer; font-family:inherit; }
+.tag-sugg:active{ background:#E4F0EF; }
+.r-tags{ display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
+.r-tag{ background:#E4F0EF; border:1px solid #BFDAD8; color:var(--teal-deep); font-size:12px; font-weight:600; padding:2px 9px; border-radius:12px; }
