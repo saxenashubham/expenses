@@ -244,3 +244,10 @@ footer.tools .spacer{ margin-left:auto; }
 .tag-sugg:active{ background:#E4F0EF; }
 .r-tags{ display:flex; flex-wrap:wrap; gap:6px; margin-top:10px; }
 .r-tag{ background:#E4F0EF; border:1px solid #BFDAD8; color:var(--teal-deep); font-size:12px; font-weight:600; padding:2px 9px; border-radius:12px; }
+
+/* ---- busy overlay (v20) ---- */
+.busy-overlay{ position:fixed; inset:0; z-index:200; background:rgba(28,27,26,.45); display:flex; align-items:center; justify-content:center; -webkit-backdrop-filter:blur(1px); backdrop-filter:blur(1px); }
+.busy-box{ background:#fff; border-radius:12px; padding:22px 28px; display:flex; flex-direction:column; align-items:center; gap:13px; box-shadow:0 12px 34px rgba(0,0,0,.22); }
+.spinner{ width:34px; height:34px; border:3px solid var(--rule); border-top-color:var(--teal); border-radius:50%; animation:rl-spin .8s linear infinite; }
+@keyframes rl-spin{ to{ transform:rotate(360deg); } }
+.busy-label{ font-size:14px; font-weight:600; color:var(--ink); }
