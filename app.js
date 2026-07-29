@@ -468,15 +468,23 @@ function render() {
             el("div", { class: "menu-who" }, USER.email || ""),
             el("button", { class: "menu-item", onclick: () => go("dash") }, "Dashboard"),
             el("button", { class: "menu-item", onclick: () => go("stmt") }, "Statements"),
-            el("button", { class: "menu-item", onclick: () => go("cards") }, "Manage cards"),
-            el("button", { class: "menu-item", onclick: () => go("export") }, "Backup / export"),
+            el("button", { class: "menu-item", onclick: () => go("cards") }, "Manage Cards"),
+            el("button", { class: "menu-item", onclick: () => go("export") }, "Backup / Export"),
             el("div", { class: "menu-sep" }),
-            el("button", { class: "menu-item danger", onclick: () => { state.menuOpen = false; doSignOut(); } }, "Sign out")
+            el("button", { class: "menu-item danger", onclick: () => { state.menuOpen = false; doSignOut(); } }, "Sign Out")
           ])
         ] : [])
       ])
     ])
   ]));
+
+  const busy = (state.cap && state.cap.reading) ? "Reading the receipt\u2026"
+    : (state.cap && state.cap.loadingPdf) ? "Rendering PDF\u2026"
+    : (state.cap && state.cap.saving) ? "Saving\u2026"
+    : state.backupBusy ? "Preparing backup\u2026" : "";
+  if (busy) root.append(el("div", { class: "busy-overlay" }, el("div", { class: "busy-box" }, [
+    el("div", { class: "spinner" }), el("div", { class: "busy-label" }, busy)
+  ])));
 
   if (state.view === "capture") return root.append(renderCapture());
   if (state.view === "cards") return root.append(renderManageCards());
@@ -692,7 +700,7 @@ function renderLinkRow(c) {
 function renderCapture() {
   const c = state.cap;
   const shot = c.img
-    ? el("div", { class: "shot" }, [el("img", { src: c.img, alt: "receipt" }), c.reading ? el("div", { class: "reading" }, "Reading the receipt\u2026") : null])
+    ? el("div", { class: "shot" }, [el("img", { src: c.img, alt: "receipt" })])
     : el("div", { class: "drop" }, c.loadingPdf ? [el("div", { class: "reading" }, "Rendering PDF\u2026")] : [
         el("button", { class: "btn primary", onclick: () => $("#fileCam").click() }, "\uD83D\uDCF7 Take photo"),
         el("button", { class: "btn ghost", onclick: () => $("#fileImg").click() }, "\uD83D\uDDBC\uFE0F Upload image"),
