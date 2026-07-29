@@ -144,7 +144,7 @@ const state = {
   fltSig: "",
   dash: { currency: "USD", seg: "card", range: "12m" },
   stmt: { card: "", currency: "USD", open: null },
-  backupDone: {}, backupBusy: false,
+  backupDone: {}, backupBusy: false, cardBusy: false,
   export: { name: "", from: lastMonthRange().from, to: lastMonthRange().to, card: "", category: "", currency: "", hcsaOnly: false, tag: "" }
 };
 const CATEGORY_COLORS = { Medical: "#B23A2E", Food: "#B5852A", Groceries: "#5B7A2E", Travel: "#2E5E9E", Vehicle: "#8A5A2B", Shopping: "#7A3E8A", Utilities: "#3A7A8A", Other: "#8A857C" };
@@ -266,35 +266,38 @@ function cardsMapToArray(map) {
 }
 const cardsRef = () => doc(db, "meta", "cards");
 
+async function busyWrite(fn) {
+  state.cardBusy = true; render();
+  try { return await fn(); } catch (e) { console.error(e); } finally { state.cardBusy = false; render(); }
+}
 async function addCard(name) {
   name = (name || "").trim(); if (!name) return "";
   if (!CARDS.some((c) => c.name === name)) {
-    try { await setDoc(cardsRef(), { cards: { [name]: { tokens: {} } } }, { merge: true }); } catch (e) { console.error(e); }
+    await busyWrite(() => setDoc(cardsRef(), { cards: { [name]: { tokens: {} } } }, { merge: true }));
   }
   return name;
 }
 async function linkToken(cardName, last4, label) {
   last4 = (last4 || "").replace(/\D/g, "").slice(-4); if (!cardName || !last4) return;
-  // deep-merge writes only this token's label; sibling tokens/cards untouched.
-  try { await setDoc(cardsRef(), { cards: { [cardName]: { tokens: { [last4]: { label: (label || "").trim() } } } } }, { merge: true }); } catch (e) { console.error(e); }
+  await busyWrite(() => setDoc(cardsRef(), { cards: { [cardName]: { tokens: { [last4]: { label: (label || "").trim() } } } } }, { merge: true }));
 }
 async function removeToken(cardName, last4) {
   last4 = (last4 || "").replace(/\D/g, "").slice(-4); if (!cardName || !last4) return;
-  try { await updateDoc(cardsRef(), new FieldPath("cards", cardName, "tokens", last4), deleteField()); } catch (e) { console.error(e); }
+  await busyWrite(() => updateDoc(cardsRef(), new FieldPath("cards", cardName, "tokens", last4), deleteField()));
 }
 async function removeCard(name) {
   if (!name) return;
-  try { await updateDoc(cardsRef(), new FieldPath("cards", name), deleteField()); } catch (e) { console.error(e); }
+  await busyWrite(() => updateDoc(cardsRef(), new FieldPath("cards", name), deleteField()));
 }
 async function setCardColor(name, color) {
   if (!name) return;
-  try { await setDoc(cardsRef(), { cards: { [name]: { color } } }, { merge: true }); } catch (e) { console.error(e); }
+  await busyWrite(() => setDoc(cardsRef(), { cards: { [name]: { color } } }, { merge: true }));
 }
 async function setCardStmtDay(name, day) {
   if (!name) return;
   const raw = String(day).trim();
   const val = raw === "" ? deleteField() : Math.max(1, Math.min(31, parseInt(raw, 10) || 1));
-  try { await setDoc(cardsRef(), { cards: { [name]: { stmtDay: val } } }, { merge: true }); } catch (e) { console.error(e); }
+  await busyWrite(() => setDoc(cardsRef(), { cards: { [name]: { stmtDay: val } } }, { merge: true }));
 }
 async function renameCard(oldName, newName) {
   oldName = (oldName || "").trim(); newName = (newName || "").trim();
@@ -302,15 +305,13 @@ async function renameCard(oldName, newName) {
   if (CARDS.some((c) => c.name === newName)) { alert("A card named \"" + newName + "\" already exists."); return; }
   const src = CARDS.find((c) => c.name === oldName); if (!src) return;
   const tokensMap = {}; (src.tokens || []).forEach((t) => { if (t.last4) tokensMap[t.last4] = { label: t.label || "" }; });
-  try {
-    // create the renamed card carrying tokens + color, then drop the old key
+  await busyWrite(async () => {
     await setDoc(cardsRef(), { cards: { [newName]: { tokens: tokensMap, color: src.color || "" } } }, { merge: true });
     await updateDoc(cardsRef(), new FieldPath("cards", oldName), deleteField());
-    // re-point every linked receipt (one atomic field write each)
     for (const r of RECEIPTS.filter((r) => r.card === oldName)) {
       try { await updateDoc(doc(db, "receipts", r.id), { card: newName }); } catch (e) { console.error(e); }
     }
-  } catch (e) { console.error(e); alert("Rename failed: " + (e.message || e)); }
+  });
 }
 async function saveReceiptEdit() {
   const e2 = state.edit; if (!e2) return;
@@ -481,6 +482,7 @@ function render() {
   const busy = (state.cap && state.cap.reading) ? "Reading the receipt\u2026"
     : (state.cap && state.cap.loadingPdf) ? "Rendering PDF\u2026"
     : (state.cap && state.cap.saving) ? "Saving\u2026"
+    : state.cardBusy ? "Saving\u2026"
     : state.backupBusy ? "Preparing backup\u2026" : "";
   if (busy) root.append(el("div", { class: "busy-overlay" }, el("div", { class: "busy-box" }, [
     el("div", { class: "spinner" }), el("div", { class: "busy-label" }, busy)
