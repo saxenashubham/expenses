@@ -441,6 +441,11 @@ function exportCsv() {
 }
 
 // ---------- render ----------
+let searchTimer = null;
+function scheduleSearchRender() {
+  if (searchTimer) clearTimeout(searchTimer);
+  searchTimer = setTimeout(() => { state.focusSearch = true; render(); }, 300);
+}
 function render() {
   const root = $("#app"); root.textContent = "";
   if (state.screen === "loading") return root.append(el("div", { class: "empty" }, "Opening the ledger\u2026"));
@@ -521,7 +526,7 @@ function render() {
         allTags().length ? labelInput("Tag", selectFrom(["", ...allTags()], state.flt.tag, (v) => { state.flt.tag = v; render(); }, "Any"), "card") : null
       ]),
       el("div", { class: "f-row" }, [
-        labelInput("Search", el("input", { value: state.flt.text, placeholder: "merchant or note", oninput: (e) => { state.flt.text = e.target.value; render(); } }), "grow"),
+        labelInput("Search", el("input", { id: "search-input", value: state.flt.text, placeholder: "merchant or note", oninput: (e) => { state.flt.text = e.target.value; scheduleSearchRender(); } }), "grow"),
         ownerChips(),
         curChips(),
         el("button", { class: "chip" + (state.flt.hcsaOnly ? " on" : ""), onclick: () => { state.flt.hcsaOnly = !state.flt.hcsaOnly; render(); } }, "HCSA only"),
@@ -571,6 +576,11 @@ function render() {
     }
   }
 
+  if (state.focusSearch) {
+    state.focusSearch = false;
+    const si = $("#search-input");
+    if (si) { si.focus(); const L = si.value.length; try { si.setSelectionRange(L, L); } catch (e) {} }
+  }
 }
 
 function renderSignIn() {
