@@ -99,7 +99,7 @@ footer.tools .link{ font-size:12px; }
 }
 
 /* ---- shared / Firebase additions ---- */
-.gate{ text-align:center; padding:56px 20px; max-width:440px; margin:0 auto; }
+.gate{ text-align:center; padding:24px 20px; max-width:440px; margin:0 auto; min-height:calc(100vh - 48px); min-height:calc(100dvh - 48px); display:flex; flex-direction:column; align-items:center; justify-content:center; }
 .gate h1{ font-size:22px; font-weight:650; margin:6px 0 10px; }
 .gate-note{ color:var(--muted); margin:0 0 20px; }
 .owner-chips{ display:flex; gap:6px; }
