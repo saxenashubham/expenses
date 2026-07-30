@@ -1,25 +1,38 @@
-// Cartpath service worker — network-first (new deploys land on next open),
-// cache fallback so the app shell opens offline. Firestore handles data offline itself.
-const CACHE = "cartpath-v6";
-const SHELL = ["./","./index.html","./styles.css","./app.js","./config.js","./manifest.webmanifest","./icon-192.png","./icon-512.png"];
+/* Network-first service worker.
+   Fresh code loads on every online launch — no reinstall, no version-bump ritual.
+   Static assets (icons, css) fall back to cache when offline. */
 
-self.addEventListener("install", e => {
-  e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting()));
+const CACHE = "rl-shared-22";               // single rolling cache; no per-release bump needed
+const OFFLINE_SHELL = ["./index.html", "./styles.css", "./icon-192.png", "./icon-512.png", "./manifest.webmanifest"];
+
+self.addEventListener("install", (e) => {
+  // Pre-cache the shell so the app still opens offline, then take over immediately.
+  e.waitUntil(caches.open(CACHE).then((c) => c.addAll(OFFLINE_SHELL)).then(() => self.skipWaiting()));
 });
-self.addEventListener("activate", e => {
+
+self.addEventListener("activate", (e) => {
   e.waitUntil(
-    caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k))))
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
-self.addEventListener("fetch", e => {
+
+self.addEventListener("fetch", (e) => {
   const req = e.request;
-  if (req.method !== "GET") return;                 // never cache POSTs (worker/parse, Firestore)
   const url = new URL(req.url);
-  if (url.origin !== self.location.origin) return;  // let Firebase/fonts/CDN go straight to network
+
+  // Let cross-origin (Firebase, gstatic, the Worker) go straight to the network, untouched.
+  if (req.method !== "GET" || url.origin !== self.location.origin) return;
+
+  // NETWORK-FIRST: always try the network; update the cache; fall back to cache only if offline.
   e.respondWith(
     fetch(req)
-      .then(res => { const copy = res.clone(); caches.open(CACHE).then(c => c.put(req, copy)); return res; })
-      .catch(() => caches.match(req).then(r => r || caches.match("./index.html")))
+      .then((res) => {
+        const copy = res.clone();
+        caches.open(CACHE).then((c) => c.put(req, copy)).catch(() => {});
+        return res;
+      })
+      .catch(() => caches.match(req).then((hit) => hit || caches.match("./index.html")))
   );
 });
