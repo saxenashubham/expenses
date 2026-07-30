@@ -261,3 +261,7 @@ footer.tools .spacer{ margin-left:auto; }
 .gate-logo{ width:84px; height:84px; border-radius:19px; margin:0 auto 14px; display:block; }
 .gate-name{ font-size:30px; text-align:center; }
 .gate-tag{ text-align:center; color:var(--muted); font-weight:600; margin:6px 0 18px; }
+
+/* ---- first-load spinner (v26) ---- */
+.loading-screen{ display:flex; flex-direction:column; align-items:center; justify-content:center; gap:14px; padding:64px 20px; color:var(--muted); }
+.loading-label{ font-size:14px; font-weight:600; }
