@@ -455,9 +455,12 @@ function render() {
 
   const go = (v) => { state.menuOpen = false; state.view = v; render(); };
   root.append(el("header", { class: "app" }, [
-    el("div", {}, [
-      el("div", { class: "eyebrow" }, "Receipt Ledger \u00b7 " + firstName(USER.displayName || USER.email)),
-      el("h1", {}, "Every slip, filed by the date you'll search for it.")
+    el("div", { class: "brand" }, [
+      el("img", { class: "brand-logo", src: "./logo-96.png", alt: "Receipt360" }),
+      el("div", {}, [
+        el("div", { class: "brand-name" }, [el("span", {}, "Receipt"), el("span", { class: "brand-360" }, "360")]),
+        el("div", { class: "brand-tag" }, "Capture. Organize. Reconcile.")
+      ])
     ]),
     el("div", { class: "head-actions" }, [
       el("button", { class: "btn primary", onclick: startCapture }, "Capture receipt"),
@@ -595,8 +598,9 @@ function render() {
 
 function renderSignIn() {
   return el("div", { class: "gate" }, [
-    el("div", { class: "eyebrow" }, "Receipt Ledger"),
-    el("h1", {}, "A shared receipt ledger for the two of you."),
+    el("img", { class: "gate-logo", src: "./logo-96.png", alt: "Receipt360" }),
+    el("div", { class: "brand-name gate-name" }, [el("span", {}, "Receipt"), el("span", { class: "brand-360" }, "360")]),
+    el("p", { class: "gate-tag" }, "Capture. Organize. Reconcile. 360\u00b0 complete."),
     el("p", { class: "gate-note" }, "Sign in with the Google account you set up for this."),
     el("button", { class: "btn primary", onclick: doSignIn }, "Sign in with Google")
   ]);

@@ -251,3 +251,13 @@ footer.tools .spacer{ margin-left:auto; }
 .spinner{ width:34px; height:34px; border:3px solid var(--rule); border-top-color:var(--teal); border-radius:50%; animation:rl-spin .8s linear infinite; }
 @keyframes rl-spin{ to{ transform:rotate(360deg); } }
 .busy-label{ font-size:14px; font-weight:600; color:var(--ink); }
+
+/* ---- Receipt360 brand (v23) ---- */
+.brand{ display:flex; align-items:center; gap:12px; }
+.brand-logo{ width:48px; height:48px; border-radius:11px; flex:none; }
+.brand-name{ font-size:22px; font-weight:800; letter-spacing:-.01em; line-height:1; color:var(--ink); }
+.brand-360{ color:#0F9D58; }
+.brand-tag{ font-size:12px; color:var(--muted); margin-top:3px; font-weight:600; }
+.gate-logo{ width:84px; height:84px; border-radius:19px; margin:0 auto 14px; display:block; }
+.gate-name{ font-size:30px; text-align:center; }
+.gate-tag{ text-align:center; color:var(--muted); font-weight:600; margin:6px 0 18px; }

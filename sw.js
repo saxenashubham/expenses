@@ -2,8 +2,8 @@
    Fresh code loads on every online launch — no reinstall, no version-bump ritual.
    Static assets (icons, css) fall back to cache when offline. */
 
-const CACHE = "rl-shared-22";               // single rolling cache; no per-release bump needed
-const OFFLINE_SHELL = ["./index.html", "./styles.css", "./icon-192.png", "./icon-512.png", "./manifest.webmanifest"];
+const CACHE = "rl-shared-23";               // single rolling cache; no per-release bump needed
+const OFFLINE_SHELL = ["./index.html", "./styles.css", "./icon-192.png", "./icon-512.png", "./logo-96.png", "./apple-touch-icon.png", "./favicon-32.png", "./favicon-16.png", "./manifest.webmanifest"];
 
 self.addEventListener("install", (e) => {
   // Pre-cache the shell so the app still opens offline, then take over immediately.
