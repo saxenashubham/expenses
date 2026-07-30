@@ -145,6 +145,7 @@ const state = {
   dash: { currency: "USD", seg: "card", range: "12m" },
   stmt: { card: "", currency: "USD", open: null },
   backupDone: {}, backupBusy: false, cardBusy: false,
+  receiptsLoaded: false,
   export: { name: "", from: lastMonthRange().from, to: lastMonthRange().to, card: "", category: "", currency: "", hcsaOnly: false, tag: "" }
 };
 const CATEGORY_COLORS = { Medical: "#B23A2E", Food: "#B5852A", Groceries: "#5B7A2E", Travel: "#2E5E9E", Vehicle: "#8A5A2B", Shopping: "#7A3E8A", Utilities: "#3A7A8A", Other: "#8A857C" };
@@ -199,13 +200,14 @@ function teardown() {
   if (unsubReceipts) { unsubReceipts(); unsubReceipts = null; }
   if (unsubCards) { unsubCards(); unsubCards = null; }
   if (unsubBackup) { unsubBackup(); unsubBackup = null; }
-  RECEIPTS = []; CARDS = [];
+  RECEIPTS = []; CARDS = []; state.receiptsLoaded = false;
 }
 function subscribe() {
   unsubReceipts = onSnapshot(query(collection(db, "receipts"), orderBy("date", "desc")), (snap) => {
     RECEIPTS = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+    state.receiptsLoaded = true;
     if (state.screen === "ledger") render();
-  }, (err) => { console.error(err); });
+  }, (err) => { console.error(err); state.receiptsLoaded = true; if (state.screen === "ledger") render(); });
   unsubCards = onSnapshot(doc(db, "meta", "cards"), (d) => {
     const data = d.exists() ? d.data() : {};
     CARDS = (data.cards && !Array.isArray(data.cards))
@@ -496,6 +498,14 @@ function render() {
   if (state.view === "dash") return root.append(renderDash());
   if (state.view === "stmt") return root.append(renderStatements());
   if (state.view === "export") return root.append(renderExport());
+
+  if (!state.receiptsLoaded) {
+    root.append(el("div", { class: "loading-screen" }, [
+      el("div", { class: "spinner" }),
+      el("div", { class: "loading-label" }, "Loading your receipts\u2026")
+    ]));
+    return;
+  }
 
   const cards = cardNames();
   // ---- monthly backup reminder (previous full month; dismissal syncs across devices) ----
